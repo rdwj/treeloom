@@ -19,11 +19,16 @@ from treeloom.graph.cpg import CodePropertyGraph
 from treeloom.model.edges import CpgEdge, EdgeKind
 from treeloom.model.location import SourceLocation, SourceRange
 from treeloom.model.nodes import CpgNode, NodeId, NodeKind
+from treeloom.query.api import GraphQuery
+from treeloom.query.pattern import ChainPattern, StepMatcher
 from treeloom.version import __version__
 
 __all__ = [
     "__version__",
+    "ChainPattern",
     "FunctionSummary",
+    "GraphQuery",
+    "StepMatcher",
     "backward_reachable",
     "compute_summaries",
     "forward_reachable",
