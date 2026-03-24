@@ -73,6 +73,9 @@ def _register_builtins(registry: LanguageRegistry) -> None:
         "TSXVisitor",
         "tree_sitter_typescript",
     )
+    _try_register(registry, "treeloom.lang.builtin.cpp", "CppVisitor", "tree_sitter_cpp")
+    _try_register(registry, "treeloom.lang.builtin.c", "CVisitor", "tree_sitter_c")
+    _try_register(registry, "treeloom.lang.builtin.rust", "RustVisitor", "tree_sitter_rust")
 
 
 def _try_register(
