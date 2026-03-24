@@ -1,0 +1,49 @@
+# treeloom
+
+> Language-agnostic Code Property Graph library for Python. Parses source code via tree-sitter, builds a unified graph (AST + control flow + data flow + call graph), and provides taint analysis, pattern matching, and visualization. Supports Python, JavaScript, TypeScript, Go, Java, C, C++, and Rust.
+
+All public types are importable from the top-level `treeloom` package.
+
+## Core Workflow
+
+Building and analyzing a CPG follows four steps:
+
+1. **Build**: `CPGBuilder().add_directory(path).build()` parses source files and returns a `CodePropertyGraph`
+2. **Annotate**: `cpg.annotate_node(node_id, key, value)` attaches consumer metadata (separate from structural attrs)
+3. **Analyze**: `cpg.taint(policy)` runs worklist-based forward taint analysis; `cpg.query()` provides path/reachability/pattern queries
+4. **Export**: `to_json(cpg)`, `to_dot(cpg)`, `generate_html(cpg)` serialize or visualize the graph
+
+## API Reference
+
+- [README](README.md): Installation, quick start, feature overview
+- [Full API specification](CLAUDE.md): Complete data model, method signatures, algorithms, and design rationale
+- [Sanicode integration guide](docs/sanicode-integration.md): How to use treeloom as a dependency for security analysis
+
+## Key Types
+
+- `CPGBuilder`: Fluent builder with `add_file()`, `add_directory()`, `add_source()`, `build()`
+- `CodePropertyGraph`: Central graph object with node/edge access, annotations, `taint()`, `query()`, `to_dict()`/`from_dict()`
+- `NodeKind`: Enum -- MODULE, CLASS, FUNCTION, PARAMETER, VARIABLE, CALL, LITERAL, RETURN, IMPORT, BRANCH, LOOP, BLOCK
+- `EdgeKind`: Enum -- CONTAINS, HAS_PARAMETER, HAS_RETURN_TYPE, FLOWS_TO, BRANCHES_TO, DATA_FLOWS_TO, DEFINED_BY, USED_BY, CALLS, RESOLVES_TO, IMPORTS
+- `CpgNode`: Dataclass with `id: NodeId`, `kind: NodeKind`, `name: str`, `location: SourceLocation | None`, `scope: NodeId | None`, `attrs: dict`
+- `NodeId`: Opaque, hashable identifier. Never construct directly -- only use IDs returned by the builder or graph.
+- `TaintPolicy`: Consumer-provided callbacks -- `sources(node) -> TaintLabel | None`, `sinks(node) -> bool`, `sanitizers(node) -> bool`
+- `TaintResult`: Contains `paths: list[TaintPath]` with methods `unsanitized_paths()`, `sanitized_paths()`, `paths_to_sink()`, `labels_at()`
+- `GraphQuery`: Path queries (`paths_between`, `reachable_from`, `reaching`), node lookup (`node_at`, `nodes_in_file`), pattern matching (`match_chain`)
+- `ChainPattern` / `StepMatcher`: Declarative pattern matching with wildcard support and edge-kind filtering
+- `Overlay` / `OverlayStyle`: Consumer-injected visual styling for HTML export
+- `to_json` / `from_json`: Round-trip JSON serialization including annotations
+
+## Gotchas
+
+- **Annotations vs attrs**: `CpgNode.attrs` holds structural metadata set by language visitors (is_async, decorators, type_annotation). Consumer metadata (security roles, CWE IDs) goes in `cpg.annotate_node()` which stores in a separate dict. Never mix them.
+- **Lines are 1-based**: `SourceLocation.line` is 1-based (matching editors), even though tree-sitter uses 0-based rows internally.
+- **NodeId is opaque**: Format is `"{kind}:{file}:{line}:{col}:{counter}"` but consumers must treat it as an opaque string. Never parse or construct NodeIds.
+- **Serialization round-trip**: `from_json(to_json(cpg))` always produces an equivalent graph. `from_dict(to_dict())` is the hard contract.
+- **MultiDiGraph**: Multiple edge kinds can exist between the same node pair (e.g., CONTAINS + DATA_FLOWS_TO). The backend uses NetworkX MultiDiGraph.
+- **Grammar packages are optional**: Core library works without them. Install `treeloom[languages]` for all grammars, or individual packages like `tree-sitter-python`.
+
+## Optional
+
+- [pyproject.toml](pyproject.toml): Package metadata, dependencies, extras
+- [RESEARCH.md](RESEARCH.md): CPG tooling landscape and rationale for building treeloom

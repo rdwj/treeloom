@@ -1,0 +1,329 @@
+# treeloom
+
+> Language-agnostic Code Property Graph library for Python. Parses source code via tree-sitter, builds a unified graph (AST + control flow + data flow + call graph), and provides taint analysis, pattern matching, and visualization. Supports Python, JavaScript, TypeScript, Go, Java, C, C++, and Rust.
+
+All public types are importable from the top-level `treeloom` package. Install with `pip install treeloom[languages]` for all grammar packages, or `pip install treeloom` for core only (no parsing without grammars).
+
+## Core Workflow
+
+```python
+from pathlib import Path
+from treeloom import CPGBuilder, TaintPolicy, TaintLabel, NodeKind, to_json, from_json, generate_html
+
+# 1. Build
+cpg = CPGBuilder().add_directory(Path("src/")).build()
+
+# 2. Annotate (consumer metadata, separate from structural attrs)
+for node in cpg.nodes(kind=NodeKind.CALL):
+    if node.name in ("exec", "eval"):
+        cpg.annotate_node(node.id, "role", "sink")
+
+# 3. Analyze
+policy = TaintPolicy(
+    sources=lambda n: TaintLabel("user_input", n.id) if cpg.get_annotation(n.id, "role") == "entry_point" else None,
+    sinks=lambda n: cpg.get_annotation(n.id, "role") == "sink",
+    sanitizers=lambda n: cpg.get_annotation(n.id, "role") == "sanitizer",
+)
+result = cpg.taint(policy)
+for path in result.unsanitized_paths():
+    print(f"{path.source.name} -> {path.sink.name}")
+
+# 4. Export
+json_str = to_json(cpg)                       # round-trips with from_json()
+html = generate_html(cpg, title="My CPG")      # self-contained HTML with Cytoscape.js
+```
+
+## CPGBuilder
+
+```python
+class CPGBuilder:
+    def __init__(self, registry: LanguageRegistry | None = None) -> None
+    def add_file(self, path: Path) -> CPGBuilder
+    def add_directory(self, path: Path, exclude: list[str] | None = None) -> CPGBuilder
+    def add_source(self, source: bytes, filename: str, language: str | None = None) -> CPGBuilder
+    def build(self) -> CodePropertyGraph
+```
+
+Default directory exclusions: `__pycache__`, `node_modules`, `.git`, `venv`, `.venv`. The `exclude` parameter accepts gitignore-style patterns.
+
+Language is auto-detected from file extension. The `LanguageRegistry.default()` registers all visitors whose grammar packages are installed.
+
+## CodePropertyGraph
+
+```python
+class CodePropertyGraph:
+    # Node access
+    def node(self, node_id: NodeId) -> CpgNode | None
+    def nodes(self, kind: NodeKind | None = None, file: Path | None = None) -> Iterator[CpgNode]
+    def edges(self, kind: EdgeKind | None = None) -> Iterator[CpgEdge]
+
+    # Traversal
+    def successors(self, node_id: NodeId, edge_kind: EdgeKind | None = None) -> list[CpgNode]
+    def predecessors(self, node_id: NodeId, edge_kind: EdgeKind | None = None) -> list[CpgNode]
+
+    # Scope navigation
+    def scope_of(self, node_id: NodeId) -> CpgNode | None
+    def children_of(self, node_id: NodeId) -> list[CpgNode]
+
+    # Annotations (stored separately from CpgNode.attrs)
+    def annotate_node(self, node_id: NodeId, key: str, value: Any) -> None
+    def annotate_edge(self, source: NodeId, target: NodeId, key: str, value: Any) -> None
+    def get_annotation(self, node_id: NodeId, key: str) -> Any | None
+    def get_edge_annotation(self, source: NodeId, target: NodeId, key: str) -> Any | None
+    def annotations_for(self, node_id: NodeId) -> dict[str, Any]
+
+    # Analysis
+    def query(self) -> GraphQuery
+    def taint(self, policy: TaintPolicy) -> TaintResult
+
+    # Serialization (round-trip: from_dict(to_dict()) == equivalent graph)
+    def to_dict(self) -> dict[str, Any]
+    @classmethod
+    def from_dict(cls, data: dict[str, Any]) -> CodePropertyGraph
+
+    # Properties
+    @property
+    def node_count(self) -> int
+    @property
+    def edge_count(self) -> int
+    @property
+    def files(self) -> list[Path]
+```
+
+## Data Model
+
+```python
+@dataclass(frozen=True, slots=True)
+class SourceLocation:
+    file: Path
+    line: int       # 1-based
+    column: int = 0 # 0-based
+
+@dataclass(frozen=True, slots=True)
+class NodeId:
+    _value: str     # opaque -- never parse or construct directly
+
+class NodeKind(str, Enum):
+    MODULE = "module"
+    CLASS = "class"
+    FUNCTION = "function"
+    PARAMETER = "parameter"
+    VARIABLE = "variable"
+    CALL = "call"
+    LITERAL = "literal"
+    RETURN = "return"
+    IMPORT = "import"
+    BRANCH = "branch"
+    LOOP = "loop"
+    BLOCK = "block"
+
+@dataclass
+class CpgNode:
+    id: NodeId
+    kind: NodeKind
+    name: str
+    location: SourceLocation | None
+    scope: NodeId | None = None
+    attrs: dict[str, Any]  # structural metadata from visitors, NOT consumer data
+
+class EdgeKind(str, Enum):
+    # AST
+    CONTAINS = "contains"
+    HAS_PARAMETER = "has_parameter"
+    HAS_RETURN_TYPE = "has_return_type"
+    # Control flow
+    FLOWS_TO = "flows_to"
+    BRANCHES_TO = "branches_to"
+    # Data flow
+    DATA_FLOWS_TO = "data_flows_to"
+    DEFINED_BY = "defined_by"
+    USED_BY = "used_by"
+    # Call graph
+    CALLS = "calls"
+    RESOLVES_TO = "resolves_to"
+    # Module
+    IMPORTS = "imports"
+
+@dataclass(frozen=True, slots=True)
+class CpgEdge:
+    source: NodeId
+    target: NodeId
+    kind: EdgeKind
+    attrs: dict[str, Any]
+```
+
+Common CpgNode.attrs keys by kind:
+
+| NodeKind | Common attrs |
+|----------|-------------|
+| FUNCTION | is_async, is_method, is_static, decorators |
+| PARAMETER | type_annotation, position, default_value |
+| VARIABLE | type_annotation, is_global, is_field |
+| CALL | args_count, is_method_call, receiver |
+| LITERAL | literal_type (str/int/float/bool/none), raw_value |
+| IMPORT | module, names, is_from, alias |
+| BRANCH | branch_type (if/elif/switch/match), has_else |
+| LOOP | loop_type (for/while/do_while), iterator_var |
+
+## Taint Analysis
+
+```python
+@dataclass(frozen=True)
+class TaintLabel:
+    name: str           # e.g. "user_input", "env_var"
+    origin: NodeId      # the node that introduced this taint
+    attrs: dict         # consumer metadata (excluded from hash/eq)
+
+@dataclass
+class TaintPolicy:
+    sources: Callable[[CpgNode], TaintLabel | None]
+    sinks: Callable[[CpgNode], bool]
+    sanitizers: Callable[[CpgNode], bool]
+    propagators: list[TaintPropagator] = []
+
+@dataclass
+class TaintPropagator:
+    match: Callable[[CpgNode], bool]
+    param_to_return: bool = True
+    param_to_param: dict[int, int] | None = None
+
+@dataclass
+class TaintPath:
+    source: CpgNode
+    sink: CpgNode
+    intermediates: list[CpgNode]    # full path including source and sink
+    labels: frozenset[TaintLabel]
+    is_sanitized: bool
+    sanitizers: list[CpgNode]
+
+@dataclass
+class TaintResult:
+    paths: list[TaintPath]
+    def paths_to_sink(self, sink_id: NodeId) -> list[TaintPath]
+    def paths_from_source(self, source_id: NodeId) -> list[TaintPath]
+    def unsanitized_paths(self) -> list[TaintPath]
+    def sanitized_paths(self) -> list[TaintPath]
+    def labels_at(self, node_id: NodeId) -> frozenset[TaintLabel]
+```
+
+The taint engine uses worklist-based forward analysis over DATA_FLOWS_TO edges. Sanitizers mark paths as sanitized but do not stop propagation. Inter-procedural flow uses function summaries computed from param-to-return DFG paths.
+
+## Query API
+
+```python
+class GraphQuery:
+    def paths_between(self, source: NodeId, target: NodeId, cutoff: int = 10) -> list[list[CpgNode]]
+    def reachable_from(self, node_id: NodeId, edge_kinds: frozenset[EdgeKind] | None = None) -> set[CpgNode]
+    def reaching(self, node_id: NodeId, edge_kinds: frozenset[EdgeKind] | None = None) -> set[CpgNode]
+    def node_at(self, file: Path, line: int) -> CpgNode | None
+    def nodes_in_file(self, file: Path) -> list[CpgNode]
+    def nodes_in_scope(self, scope_id: NodeId) -> list[CpgNode]
+    def subgraph(self, root: NodeId, edge_kinds: frozenset[EdgeKind] | None = None, max_depth: int = 10) -> CodePropertyGraph
+    def match_chain(self, pattern: ChainPattern) -> list[list[CpgNode]]
+```
+
+## Pattern Matching
+
+```python
+@dataclass
+class StepMatcher:
+    kind: NodeKind | None = None
+    name_pattern: str | None = None       # regex against node.name
+    annotation_key: str | None = None
+    annotation_value: Any = None
+    wildcard: bool = False                # matches 0+ intermediate nodes
+
+@dataclass
+class ChainPattern:
+    steps: list[StepMatcher]
+    edge_kind: EdgeKind | None = None     # restrict traversal to this edge type
+```
+
+Example -- find parameter-to-exec paths via data flow:
+
+```python
+from treeloom import ChainPattern, StepMatcher, NodeKind, EdgeKind
+
+pattern = ChainPattern(
+    steps=[
+        StepMatcher(kind=NodeKind.PARAMETER),
+        StepMatcher(wildcard=True),
+        StepMatcher(kind=NodeKind.CALL, name_pattern=r"exec|eval|os\.system"),
+    ],
+    edge_kind=EdgeKind.DATA_FLOWS_TO,
+)
+matches = cpg.query().match_chain(pattern)
+```
+
+## Export
+
+```python
+# JSON (full round-trip including annotations)
+from treeloom import to_json, from_json
+json_str = to_json(cpg, indent=2)
+restored = from_json(json_str)
+
+# Graphviz DOT (optional edge/node kind filtering)
+from treeloom import to_dot
+dot = to_dot(cpg, edge_kinds=frozenset({EdgeKind.DATA_FLOWS_TO}))
+
+# Interactive HTML (Cytoscape.js + Dagre layout)
+from treeloom import generate_html, Overlay, OverlayStyle, VisualizationLayer
+html = generate_html(cpg, overlays=[overlay], title="Analysis")
+```
+
+## Overlay System
+
+```python
+@dataclass
+class OverlayStyle:
+    color: str | None = None        # CSS color
+    shape: str | None = None        # Cytoscape node shape
+    size: int | None = None
+    line_style: str | None = None   # "solid", "dashed", "dotted"
+    width: float | None = None      # edge width
+    label: str | None = None        # tooltip
+    opacity: float | None = None    # 0.0-1.0
+
+@dataclass
+class Overlay:
+    name: str
+    description: str = ""
+    default_visible: bool = True
+    node_styles: dict[NodeId, OverlayStyle]
+    edge_styles: dict[tuple[NodeId, NodeId], OverlayStyle]
+```
+
+Example -- color unsanitized sinks red:
+
+```python
+overlay = Overlay(name="Security")
+for path in result.unsanitized_paths():
+    overlay.node_styles[path.sink.id] = OverlayStyle(color="#E53935", label="SINK")
+    overlay.node_styles[path.source.id] = OverlayStyle(color="#FF9800", label="SOURCE")
+html = generate_html(cpg, overlays=[overlay])
+```
+
+## Supported Languages
+
+| Language | Extensions | Grammar Package |
+|----------|-----------|----------------|
+| Python | .py, .pyi | tree-sitter-python |
+| JavaScript | .js, .mjs, .cjs | tree-sitter-javascript |
+| TypeScript | .ts, .tsx | tree-sitter-typescript |
+| Go | .go | tree-sitter-go |
+| Java | .java | tree-sitter-java |
+| C | .c, .h | tree-sitter-c |
+| C++ | .cpp, .cxx, .cc, .hpp, .hxx, .hh | tree-sitter-cpp |
+| Rust | .rs | tree-sitter-rust |
+
+## Gotchas
+
+- **Annotations vs attrs**: `CpgNode.attrs` is structural metadata from language visitors. Consumer metadata (roles, CWE IDs, domains) goes in `cpg.annotate_node()` which stores in a separate dict. Never put consumer data in attrs.
+- **Lines are 1-based**: `SourceLocation.line` is 1-based (matching editors).
+- **NodeId is opaque**: Never parse or construct NodeIds. Only use IDs returned by the builder or graph methods.
+- **Round-trip contract**: `from_dict(to_dict())` and `from_json(to_json())` always produce equivalent graphs including all annotations.
+- **MultiDiGraph**: Multiple edge kinds can exist between the same node pair. The backend uses NetworkX MultiDiGraph.
+- **Grammar packages are optional**: Core library works without them. Missing grammars produce clear ImportError messages, not crashes.
+- **No network calls**: treeloom is fully offline. No telemetry, no downloads at runtime.
+- **Backend-agnostic**: The public API never leaks NetworkX types. All return types are treeloom's own dataclasses and Python builtins.
