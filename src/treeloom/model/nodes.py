@@ -55,3 +55,11 @@ class CpgNode:
     scope: NodeId | None = None
     attrs: dict[str, Any] = field(default_factory=dict)
     _tree_node: Any = field(default=None, repr=False, compare=False)
+
+    def __hash__(self) -> int:
+        return hash(self.id)
+
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, CpgNode):
+            return NotImplemented
+        return self.id == other.id

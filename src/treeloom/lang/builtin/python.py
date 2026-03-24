@@ -210,6 +210,7 @@ class PythonVisitor(TreeSitterVisitor):
             rhs_id = self._visit_expression(right, ctx)
             if rhs_id is not None:
                 ctx.emitter.emit_definition(var_id, rhs_id)
+                ctx.emitter.emit_data_flow(rhs_id, var_id)
 
     def _visit_expression_statement(
         self, node: tree_sitter.Node, ctx: _VisitContext
