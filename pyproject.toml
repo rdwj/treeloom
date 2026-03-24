@@ -6,7 +6,7 @@ build-backend = "hatchling.build"
 name = "treeloom"
 version = "0.1.0"
 description = "Language-agnostic Code Property Graph library — weave syntax trees into queryable, analyzable graphs"
-readme = "README.md"
+readme = "CLAUDE.md"
 license = "Apache-2.0"
 requires-python = ">=3.10"
 authors = [
