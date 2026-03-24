@@ -204,6 +204,19 @@ ruff check src/ tests/
 mypy src/treeloom/
 ```
 
+## Changelog
+
+### Version 0.1.0
+
+- Initial release
+- Code Property Graph with four layers: AST, control flow, data flow, call graph
+- Language visitors: Python, JavaScript, TypeScript/TSX, Go, Java, C, C++, Rust
+- Worklist-based taint analysis engine with inter-procedural propagation
+- Pattern matching query API with wildcard support
+- Export to JSON (round-trip), Graphviz DOT, and interactive HTML (Cytoscape.js)
+- Consumer annotation and overlay system for domain-specific visualization
+- 539 tests
+
 ## License
 
 Apache-2.0
