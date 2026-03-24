@@ -77,9 +77,9 @@ class CPGBuilder:
         Pipeline stages:
         1. Parse: select visitor by extension, parse source
         2. Visit: visitor walks parse tree, emits nodes/edges via emitter
-        3. CFG: construct control flow edges (stub -- Phase 2)
-        4. Call resolution: link call sites to definitions (stub -- Phase 2)
-        5. Inter-procedural DFG: propagate data flow across calls (stub -- Phase 3)
+        3. CFG: construct control flow edges (future)
+        4. Call resolution: link call sites to definitions
+        5. Inter-procedural DFG: propagate data flow across calls (Phase 3)
         """
         registry = self._get_registry()
 
@@ -90,6 +90,10 @@ class CPGBuilder:
         # Process queued raw sources
         for source_bytes, filename, language in self._sources:
             self._process_source(source_bytes, filename, language, registry)
+
+        # Call resolution: let each visitor link CALL nodes to FUNCTION defs
+        if registry is not None:
+            self._resolve_calls(registry)
 
         # Clear tree-sitter node references now that build is complete
         for cpg_node in self._cpg._nodes.values():
@@ -234,6 +238,42 @@ class CPGBuilder:
         self._emit_contains(scope, node_id)
         return node_id
 
+    def emit_branch_node(
+        self,
+        branch_type: str,
+        location: SourceLocation,
+        scope: NodeId,
+        has_else: bool = False,
+    ) -> NodeId:
+        """Emit a BRANCH node contained in the given scope."""
+        node_id = self._emit_node(
+            NodeKind.BRANCH,
+            branch_type,
+            location,
+            scope=scope,
+            attrs={"branch_type": branch_type, "has_else": has_else},
+        )
+        self._emit_contains(scope, node_id)
+        return node_id
+
+    def emit_loop_node(
+        self,
+        loop_type: str,
+        location: SourceLocation,
+        scope: NodeId,
+        iterator_var: str | None = None,
+    ) -> NodeId:
+        """Emit a LOOP node contained in the given scope."""
+        node_id = self._emit_node(
+            NodeKind.LOOP,
+            loop_type,
+            location,
+            scope=scope,
+            attrs={"loop_type": loop_type, "iterator_var": iterator_var},
+        )
+        self._emit_contains(scope, node_id)
+        return node_id
+
     def emit_branch(
         self,
         from_node: NodeId,
@@ -311,6 +351,22 @@ class CPGBuilder:
         self._cpg.add_edge(CpgEdge(
             source=parent, target=child, kind=EdgeKind.CONTAINS
         ))
+
+    def _resolve_calls(self, registry: Any) -> None:
+        """Run call resolution for all registered visitors."""
+        seen: set[str] = set()
+        for ext in registry.supported_extensions():
+            visitor = registry.get_visitor(ext)
+            if visitor is None or visitor.name in seen:
+                continue
+            seen.add(visitor.name)
+            try:
+                visitor.resolve_calls(self._cpg)
+            except Exception as e:
+                warnings.warn(
+                    f"Call resolution failed for {visitor.name}: {e}",
+                    stacklevel=2,
+                )
 
     def _get_registry(self) -> Any:
         """Return the language registry, lazily creating the default if needed."""
