@@ -8,17 +8,17 @@ treeloom v0.1.0 is implemented with all 8 language visitors (Python, JavaScript,
 
 ## Adding the Dependency
 
-Add treeloom as a dependency in sanicode's `pyproject.toml`:
+Add treeloom to sanicode's `pyproject.toml`:
 
 ```toml
 [project]
 dependencies = [
-    "treeloom[languages] @ git+https://github.com/rdwj/treeloom.git",
+    "treeloom[languages]>=0.1.0",
     # ... other dependencies
 ]
 ```
 
-Or for local development, use a path dependency:
+For local development against a treeloom checkout, use a path dependency instead:
 
 ```toml
 dependencies = [

@@ -44,27 +44,18 @@ reachable = cpg.query().reachable_from(
 
 ## Installation
 
-Install from GitHub:
-
 ```bash
-pip install "treeloom[languages] @ git+https://github.com/rdwj/treeloom.git"
+pip install treeloom              # core only (networkx + tree-sitter)
+pip install treeloom[languages]   # with all language grammars
+pip install treeloom[all]         # everything (grammars + dev tools)
 ```
 
-Or clone and install locally:
+For development:
 
 ```bash
 git clone https://github.com/rdwj/treeloom.git
 cd treeloom
 pip install -e ".[all]"
-```
-
-Install extras:
-
-```bash
-pip install treeloom              # core only (networkx + tree-sitter)
-pip install treeloom[languages]   # with all language grammars
-pip install treeloom[dev]         # development tools (pytest, ruff, mypy)
-pip install treeloom[all]         # everything
 ```
 
 ## Supported Languages
