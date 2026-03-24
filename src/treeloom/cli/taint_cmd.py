@@ -1,0 +1,269 @@
+"""CLI subcommand: taint -- run taint analysis with a YAML policy."""
+
+from __future__ import annotations
+
+import json
+import re
+import sys
+from argparse import ArgumentParser, Namespace
+from pathlib import Path
+from typing import Any
+
+import yaml
+
+from treeloom.analysis.taint import (
+    TaintLabel,
+    TaintPolicy,
+    TaintPropagator,
+    TaintResult,
+    run_taint,
+)
+from treeloom.export.json import from_json
+from treeloom.model.nodes import CpgNode, NodeKind
+
+
+def register(subparsers: Any) -> None:
+    """Register the ``taint`` subcommand."""
+    parser: ArgumentParser = subparsers.add_parser(
+        "taint",
+        help="Run taint analysis on a serialized CPG",
+    )
+    parser.add_argument("cpg_file", type=Path, help="Path to CPG JSON file")
+    parser.add_argument(
+        "--policy", "-p", type=Path, required=True, help="Path to YAML policy file"
+    )
+    parser.add_argument(
+        "-o", "--output", type=Path, default=None, help="Write results to file"
+    )
+    parser.add_argument(
+        "--show-sanitized",
+        action="store_true",
+        default=False,
+        help="Include sanitized paths in output",
+    )
+    parser.add_argument(
+        "--json", dest="json_output", action="store_true", default=False,
+        help="Output results as JSON",
+    )
+    parser.set_defaults(func=run_cmd)
+
+
+def run_cmd(args: Namespace, _cfg: object = None) -> int:
+    """Execute the taint subcommand."""
+    cpg_path: Path = args.cpg_file
+    policy_path: Path = args.policy
+
+    if not cpg_path.is_file():
+        print(f"Error: CPG file not found: {cpg_path}", file=sys.stderr)
+        return 1
+    if not policy_path.is_file():
+        print(f"Error: policy file not found: {policy_path}", file=sys.stderr)
+        return 1
+
+    try:
+        cpg = from_json(cpg_path.read_text())
+    except Exception as exc:
+        print(f"Error loading CPG: {exc}", file=sys.stderr)
+        return 1
+
+    try:
+        policy = load_policy(policy_path, cpg)
+    except Exception as exc:
+        print(f"Error loading policy: {exc}", file=sys.stderr)
+        return 1
+
+    result = run_taint(cpg, policy)
+
+    if args.json_output:
+        text = _format_json(result, args.show_sanitized)
+    else:
+        text = _format_human(result, args.show_sanitized)
+
+    if args.output:
+        args.output.write_text(text)
+    else:
+        print(text)
+
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Policy loading
+# ---------------------------------------------------------------------------
+
+
+def load_policy(path: Path, cpg: object = None) -> TaintPolicy:
+    """Parse a YAML policy file and compile into a TaintPolicy.
+
+    The *cpg* parameter is accepted for API symmetry but not currently used.
+    """
+    data = yaml.safe_load(path.read_text())
+    if not isinstance(data, dict):
+        msg = f"Policy file must be a YAML mapping, got {type(data).__name__}"
+        raise ValueError(msg)
+
+    source_rules: list[dict[str, Any]] = data.get("sources", [])
+    sink_rules: list[dict[str, Any]] = data.get("sinks", [])
+    sanitizer_rules: list[dict[str, Any]] = data.get("sanitizers", [])
+    propagator_rules: list[dict[str, Any]] = data.get("propagators", [])
+
+    def sources_fn(node: CpgNode) -> TaintLabel | None:
+        for rule in source_rules:
+            if _matches(node, rule):
+                label_name = rule.get("label", "tainted")
+                return TaintLabel(label_name, node.id)
+        return None
+
+    def sinks_fn(node: CpgNode) -> bool:
+        return any(_matches(node, r) for r in sink_rules)
+
+    def sanitizers_fn(node: CpgNode) -> bool:
+        return any(_matches(node, r) for r in sanitizer_rules)
+
+    propagators = [_build_propagator(r) for r in propagator_rules]
+
+    return TaintPolicy(
+        sources=sources_fn,
+        sinks=sinks_fn,
+        sanitizers=sanitizers_fn,
+        propagators=propagators,
+    )
+
+
+def _matches(node: CpgNode, rule: dict[str, Any]) -> bool:
+    """Check whether *node* matches a single rule dict."""
+    if "kind" in rule:
+        try:
+            expected = NodeKind(rule["kind"].lower())
+        except ValueError:
+            return False
+        if node.kind != expected:
+            return False
+    if "name" in rule:
+        if not re.search(rule["name"], node.name):
+            return False
+    if "attr" in rule:
+        for k, v in rule["attr"].items():
+            if node.attrs.get(k) != v:
+                return False
+    return True
+
+
+def _build_propagator(rule: dict[str, Any]) -> TaintPropagator:
+    """Build a TaintPropagator from a YAML rule dict."""
+    match_rule = rule.get("match", {})
+
+    def match_fn(node: CpgNode) -> bool:
+        return _matches(node, match_rule)
+
+    return TaintPropagator(
+        match=match_fn,
+        param_to_return=rule.get("param_to_return", True),
+        param_to_param=rule.get("param_to_param"),
+    )
+
+
+# ---------------------------------------------------------------------------
+# Formatting
+# ---------------------------------------------------------------------------
+
+
+def _format_human(result: TaintResult, show_sanitized: bool) -> str:
+    """Produce human-readable taint output."""
+    unsanitized = result.unsanitized_paths()
+    sanitized = result.sanitized_paths()
+    total = len(result.paths)
+
+    lines = [
+        f"Taint analysis: {total} paths found "
+        f"({len(unsanitized)} unsanitized, {len(sanitized)} sanitized)",
+    ]
+
+    for path in unsanitized:
+        lines.append("")
+        label_names = ", ".join(sorted(lb.name for lb in path.labels))
+        lines.append(f"[UNSANITIZED] {label_names} -> {path.sink.name}")
+        for node in path.intermediates:
+            tag = _node_tag(node, path)
+            loc = _loc_str(node)
+            lines.append(f"  {loc}  {node.kind.value:<10s} {node.name:<20s} {tag}")
+
+    if show_sanitized:
+        for path in sanitized:
+            lines.append("")
+            label_names = ", ".join(sorted(lb.name for lb in path.labels))
+            san_names = ", ".join(n.name for n in path.sanitizers)
+            lines.append(
+                f"[SANITIZED] {label_names} -> {path.sink.name} "
+                f"(via {san_names})"
+            )
+            for node in path.intermediates:
+                tag = _node_tag(node, path)
+                loc = _loc_str(node)
+                lines.append(
+                    f"  {loc}  {node.kind.value:<10s} {node.name:<20s} {tag}"
+                )
+
+    return "\n".join(lines)
+
+
+def _node_tag(node: CpgNode, path: Any) -> str:
+    """Return a parenthetical tag for a node on a path."""
+    if node == path.source:
+        label_names = ", ".join(sorted(lb.name for lb in path.labels))
+        return f"(source: {label_names})"
+    if node == path.sink:
+        return "(sink)"
+    if node in path.sanitizers:
+        return "(sanitizer)"
+    return ""
+
+
+def _loc_str(node: CpgNode) -> str:
+    """Format a node's source location for display."""
+    if node.location is None:
+        return "<unknown>:0  "
+    return f"{node.location.file}:{node.location.line:<5d}"
+
+
+def _format_json(result: TaintResult, show_sanitized: bool) -> str:
+    """Produce JSON taint output."""
+    unsanitized = result.unsanitized_paths()
+    sanitized = result.sanitized_paths()
+
+    paths_data = []
+    for path in unsanitized:
+        paths_data.append(_path_to_dict(path))
+    if show_sanitized:
+        for path in sanitized:
+            paths_data.append(_path_to_dict(path))
+
+    output = {
+        "total_paths": len(result.paths),
+        "unsanitized": len(unsanitized),
+        "sanitized": len(sanitized),
+        "paths": paths_data,
+    }
+    return json.dumps(output, indent=2, default=str)
+
+
+def _path_to_dict(path: Any) -> dict[str, Any]:
+    """Serialize a TaintPath to a dict."""
+    return {
+        "source": path.source.name,
+        "sink": path.sink.name,
+        "is_sanitized": path.is_sanitized,
+        "labels": sorted(lb.name for lb in path.labels),
+        "sanitizers": [n.name for n in path.sanitizers],
+        "intermediates": [
+            {
+                "name": n.name,
+                "kind": n.kind.value,
+                "location": (
+                    f"{n.location.file}:{n.location.line}"
+                    if n.location else None
+                ),
+            }
+            for n in path.intermediates
+        ],
+    }

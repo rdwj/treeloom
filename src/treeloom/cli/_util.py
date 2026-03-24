@@ -1,0 +1,89 @@
+"""Shared CLI helpers: CPG loading, table formatting, output writing."""
+
+from __future__ import annotations
+
+import json
+import sys
+from pathlib import Path
+
+from treeloom.export.json import from_json
+from treeloom.graph.cpg import CodePropertyGraph
+
+
+def load_cpg(path: Path) -> CodePropertyGraph:
+    """Read a JSON file and deserialize it into a CodePropertyGraph.
+
+    Raises FileNotFoundError or json.JSONDecodeError with clear messages.
+    """
+    text = path.read_text(encoding="utf-8")
+    return from_json(text)
+
+
+def format_table(rows: list[list[str]], headers: list[str] | None = None) -> str:
+    """Render *rows* as a simple column-aligned text table.
+
+    If *headers* is provided it is prepended as the first row followed by
+    a separator line.  All columns are left-aligned and padded with two
+    extra spaces between them.
+    """
+    if not rows and not headers:
+        return ""
+
+    all_rows: list[list[str]] = []
+    if headers is not None:
+        all_rows.append(headers)
+    all_rows.extend(rows)
+
+    # Compute max width per column
+    col_count = max(len(r) for r in all_rows)
+    widths = [0] * col_count
+    for row in all_rows:
+        for i, cell in enumerate(row):
+            widths[i] = max(widths[i], len(cell))
+
+    lines: list[str] = []
+    for idx, row in enumerate(all_rows):
+        parts = [cell.ljust(widths[i]) for i, cell in enumerate(row)]
+        lines.append("  ".join(parts).rstrip())
+        if headers is not None and idx == 0:
+            lines.append("  ".join("-" * w for w in widths))
+
+    return "\n".join(lines)
+
+
+def write_output(content: str, path: Path | None) -> None:
+    """Write *content* to *path* (creating parent dirs) or to stdout."""
+    if path is not None:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(content, encoding="utf-8")
+    else:
+        sys.stdout.write(content)
+        if content and not content.endswith("\n"):
+            sys.stdout.write("\n")
+
+
+def node_to_dict(node: object) -> dict:
+    """Serialize a CpgNode to a plain dict for JSON output."""
+    from treeloom.model.nodes import CpgNode
+
+    assert isinstance(node, CpgNode)
+    loc = node.location
+    return {
+        "id": str(node.id),
+        "kind": node.kind.value,
+        "name": node.name,
+        "file": str(loc.file) if loc else None,
+        "line": loc.line if loc else None,
+        "column": loc.column if loc else None,
+        "attrs": node.attrs,
+    }
+
+
+def err(msg: str) -> None:
+    """Print a message to stderr."""
+    print(msg, file=sys.stderr)
+
+
+def json_dumps(obj: object) -> str:
+    """Compact JSON serialization."""
+    return json.dumps(obj, indent=2, default=str)
