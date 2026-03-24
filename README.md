@@ -44,13 +44,21 @@ reachable = cpg.query().reachable_from(
 
 ## Installation
 
-treeloom is not yet published to PyPI. Install from source:
+Install from GitHub:
 
 ```bash
-pip install -e ".[all]"           # everything (grammars + dev tools)
+pip install "treeloom[languages] @ git+https://github.com/rdwj/treeloom.git"
 ```
 
-When published, the install options will be:
+Or clone and install locally:
+
+```bash
+git clone https://github.com/rdwj/treeloom.git
+cd treeloom
+pip install -e ".[all]"
+```
+
+Install extras:
 
 ```bash
 pip install treeloom              # core only (networkx + tree-sitter)
