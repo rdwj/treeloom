@@ -55,6 +55,24 @@ def _register_builtins(registry: LanguageRegistry) -> None:
     # However, for default() we do a quick grammar probe so we only register
     # visitors whose grammars are actually importable.
     _try_register(registry, "treeloom.lang.builtin.python", "PythonVisitor", "tree_sitter_python")
+    _try_register(
+        registry, "treeloom.lang.builtin.javascript",
+        "JavaScriptVisitor", "tree_sitter_javascript",
+    )
+    _try_register(registry, "treeloom.lang.builtin.java", "JavaVisitor", "tree_sitter_java")
+    _try_register(registry, "treeloom.lang.builtin.go", "GoVisitor", "tree_sitter_go")
+    _try_register(
+        registry,
+        "treeloom.lang.builtin.typescript",
+        "TypeScriptVisitor",
+        "tree_sitter_typescript",
+    )
+    _try_register(
+        registry,
+        "treeloom.lang.builtin.typescript",
+        "TSXVisitor",
+        "tree_sitter_typescript",
+    )
 
 
 def _try_register(
