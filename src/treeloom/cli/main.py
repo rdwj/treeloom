@@ -12,10 +12,12 @@ import yaml
 from treeloom.cli import (
     annotate_cmd,
     build,
+    completions_cmd,
     config,
     diff_cmd,
     dot_cmd,
     info,
+    pattern_cmd,
     query,
     subgraph_cmd,
     taint_cmd,
@@ -49,12 +51,14 @@ def main(argv: list[str] | None = None) -> int:
     build.register(subparsers)
     diff_cmd.register(subparsers)
     info.register(subparsers)
+    pattern_cmd.register(subparsers)
     query.register(subparsers)
     config.register(subparsers)
     subgraph_cmd.register(subparsers)
     taint_cmd.register(subparsers)
     viz_cmd.register(subparsers)
     dot_cmd.register(subparsers)
+    completions_cmd.register(subparsers)
 
     args = parser.parse_args(argv)
 
