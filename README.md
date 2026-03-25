@@ -205,6 +205,16 @@ mypy src/treeloom/
 
 ## Changelog
 
+### Version 0.2.4
+
+- Python visitor: subscript (`dict['key']`) and attribute (`obj.attr`) expressions now generate DFG nodes
+- Python visitor: decorated functions (Flask `@app.route`), keyword args, `**kwargs`, comprehensions now tracked
+- Java visitor: string concatenation with `+` emits DFG, try-catch bodies visited, annotations captured
+- Method call return values flow to assigned variables across both Python and Java
+- VAmPI (Python) taint paths: 4 → 40; VulnerableApp (Java) SQL injection/XSS/command injection paths found
+- Updated llms.txt and integration guide with `exclude_kinds` and `apply_to` patterns for better discoverability
+- 849 tests
+
 ### Version 0.2.3
 
 - Fixed data flow through chained method calls (`.format().fetchone()` pattern)
