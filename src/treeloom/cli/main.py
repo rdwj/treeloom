@@ -16,6 +16,7 @@ from treeloom.cli import (
     config,
     diff_cmd,
     dot_cmd,
+    edges_cmd,
     info,
     pattern_cmd,
     query,
@@ -52,6 +53,7 @@ def main(argv: list[str] | None = None) -> int:
     annotate_cmd.register(subparsers)
     build.register(subparsers)
     diff_cmd.register(subparsers)
+    edges_cmd.register(subparsers)
     info.register(subparsers)
     pattern_cmd.register(subparsers)
     query.register(subparsers)

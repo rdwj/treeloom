@@ -7,7 +7,7 @@ import json
 from pathlib import Path
 from typing import NamedTuple
 
-from treeloom.cli._util import err, load_cpg
+from treeloom.cli._util import load_cpg
 from treeloom.cli.config import Config
 from treeloom.graph.cpg import CodePropertyGraph
 from treeloom.model.nodes import NodeKind
@@ -20,14 +20,30 @@ class _NodeKey(NamedTuple):
     line: int
 
 
-def _node_keys(cpg: CodePropertyGraph, kind: NodeKind) -> set[_NodeKey]:
+def _normalize_path(path: str, strip_prefix: str | None, match_by_basename: bool) -> str:
+    """Apply path normalization options to a file path string."""
+    if strip_prefix and path.startswith(strip_prefix):
+        path = path[len(strip_prefix):]
+    if match_by_basename:
+        path = Path(path).name
+    return path
+
+
+def _node_keys(
+    cpg: CodePropertyGraph,
+    kind: NodeKind,
+    strip_prefix: str | None = None,
+    match_by_basename: bool = False,
+) -> set[_NodeKey]:
     keys: set[_NodeKey] = set()
     for node in cpg.nodes(kind=kind):
         loc = node.location
+        raw_file = str(loc.file) if loc else ""
+        normalized = _normalize_path(raw_file, strip_prefix, match_by_basename)
         keys.add(_NodeKey(
             kind=node.kind.value,
             name=node.name,
-            file=str(loc.file) if loc else "",
+            file=normalized,
             line=loc.line if loc else 0,
         ))
     return keys
@@ -48,21 +64,18 @@ def run_cmd(args: argparse.Namespace, _cfg: Config | None = None) -> int:
     before_path: Path = args.before
     after_path: Path = args.after
 
-    try:
-        before = load_cpg(before_path)
-    except FileNotFoundError:
-        err(f"File not found: {before_path}")
-        return 1
+    before = load_cpg(before_path)
+    after = load_cpg(after_path)
 
-    try:
-        after = load_cpg(after_path)
-    except FileNotFoundError:
-        err(f"File not found: {after_path}")
-        return 1
+    strip_prefix: str | None = getattr(args, "strip_prefix", None)
+    match_by_basename: bool = getattr(args, "match_by_basename", False)
 
-    # Build file sets
-    before_files = {str(f) for f in before.files}
-    after_files = {str(f) for f in after.files}
+    # Build file sets (with optional normalization)
+    def _norm(f: object) -> str:
+        return _normalize_path(str(f), strip_prefix, match_by_basename)
+
+    before_files = {_norm(f) for f in before.files}
+    after_files = {_norm(f) for f in after.files}
     new_files = sorted(after_files - before_files)
     removed_files = sorted(before_files - after_files)
 
@@ -74,8 +87,8 @@ def run_cmd(args: argparse.Namespace, _cfg: Config | None = None) -> int:
     ]
     diff_by_kind: dict[str, tuple[list[_NodeKey], list[_NodeKey]]] = {}
     for kind, label in kinds_of_interest:
-        bk = _node_keys(before, kind)
-        ak = _node_keys(after, kind)
+        bk = _node_keys(before, kind, strip_prefix, match_by_basename)
+        ak = _node_keys(after, kind, strip_prefix, match_by_basename)
         added = sorted(ak - bk, key=lambda k: (k.file, k.line, k.name))
         removed = sorted(bk - ak, key=lambda k: (k.file, k.line, k.name))
         diff_by_kind[label] = (added, removed)
@@ -85,11 +98,11 @@ def run_cmd(args: argparse.Namespace, _cfg: Config | None = None) -> int:
     after_file_counts: dict[str, int] = {}
     for node in before.nodes():
         if node.location:
-            key = str(node.location.file)
+            key = _norm(node.location.file)
             before_file_counts[key] = before_file_counts.get(key, 0) + 1
     for node in after.nodes():
         if node.location:
-            key = str(node.location.file)
+            key = _norm(node.location.file)
             after_file_counts[key] = after_file_counts.get(key, 0) + 1
 
     # Files that changed (present in both, different count)
@@ -173,4 +186,16 @@ def register(subparsers: argparse._SubParsersAction) -> None:  # type: ignore[ty
     p.add_argument("before", type=Path, help="Before CPG JSON file")
     p.add_argument("after", type=Path, help="After CPG JSON file")
     p.add_argument("--json", dest="as_json", action="store_true", help="Output as JSON")
+    p.add_argument(
+        "--strip-prefix",
+        metavar="PREFIX",
+        default=None,
+        help="Strip this prefix from all file paths before comparison",
+    )
+    p.add_argument(
+        "--match-by-basename",
+        action="store_true",
+        default=False,
+        help="Compare files by basename only, ignoring directory",
+    )
     p.set_defaults(func=run_cmd)

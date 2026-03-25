@@ -1,0 +1,124 @@
+"""``treeloom edges`` -- query and filter CPG edges."""
+
+from __future__ import annotations
+
+import argparse
+import re
+from pathlib import Path
+
+from treeloom.cli._util import err, format_table, json_dumps, load_cpg
+from treeloom.cli.config import Config
+from treeloom.model.edges import EdgeKind
+
+_DEFAULT_LIMIT = 50
+
+
+def register(subparsers: argparse._SubParsersAction) -> None:  # type: ignore[type-arg]
+    p = subparsers.add_parser("edges", help="Query and filter CPG edges")
+    p.add_argument("cpg_file", type=Path, help="CPG JSON file")
+    p.add_argument(
+        "--kind", "-k", action="append", default=None, metavar="KIND",
+        help="Filter by edge kind (repeatable, e.g. data_flows_to, calls)",
+    )
+    p.add_argument(
+        "--source", "-s", metavar="PATTERN",
+        help="Filter edges where source node name matches (regex)",
+    )
+    p.add_argument(
+        "--target", "-t", metavar="PATTERN",
+        help="Filter edges where target node name matches (regex)",
+    )
+    p.add_argument("--json", dest="as_json", action="store_true", help="Output as JSON")
+    p.add_argument(
+        "--limit", "-l", type=int, default=_DEFAULT_LIMIT,
+        help=f"Max results (default {_DEFAULT_LIMIT})",
+    )
+    p.set_defaults(func=run_cmd)
+
+
+def _parse_kinds(raw: list[str] | None) -> list[EdgeKind] | None:
+    if raw is None:
+        return None
+    valid = {k.value: k for k in EdgeKind}
+    kinds: list[EdgeKind] = []
+    for name in raw:
+        lower = name.lower()
+        if lower not in valid:
+            err(f"Unknown edge kind: {name!r}. Valid kinds: {', '.join(valid)}")
+            raise SystemExit(1)
+        kinds.append(valid[lower])
+    return kinds
+
+
+def run_cmd(args: argparse.Namespace, _cfg: Config | None = None) -> int:
+    try:
+        cpg = load_cpg(args.cpg_file)
+    except FileNotFoundError:
+        err(f"File not found: {args.cpg_file}")
+        return 1
+
+    kinds = _parse_kinds(args.kind)
+
+    source_re: re.Pattern | None = None  # type: ignore[type-arg]
+    if args.source:
+        try:
+            source_re = re.compile(args.source)
+        except re.error as exc:
+            err(f"Invalid --source regex: {exc}")
+            return 1
+
+    target_re: re.Pattern | None = None  # type: ignore[type-arg]
+    if args.target:
+        try:
+            target_re = re.compile(args.target)
+        except re.error as exc:
+            err(f"Invalid --target regex: {exc}")
+            return 1
+
+    limit: int = args.limit
+
+    results = []
+    for edge in cpg.edges():
+        if kinds is not None and edge.kind not in kinds:
+            continue
+        src_node = cpg.node(edge.source)
+        tgt_node = cpg.node(edge.target)
+        if src_node is None or tgt_node is None:
+            continue
+        if source_re is not None and not source_re.search(src_node.name):
+            continue
+        if target_re is not None and not target_re.search(tgt_node.name):
+            continue
+        results.append((edge, src_node, tgt_node))
+        if len(results) >= limit:
+            break
+
+    if args.as_json:
+        data = [
+            {
+                "kind": edge.kind.value,
+                "source": {"id": str(edge.source), "name": src.name, "kind": src.kind.value},
+                "target": {"id": str(edge.target), "name": tgt.name, "kind": tgt.kind.value},
+                "attrs": edge.attrs,
+            }
+            for edge, src, tgt in results
+        ]
+        print(json_dumps(data))
+        return 0
+
+    if not results:
+        print("No matching edges.")
+        return 0
+
+    rows = [
+        [
+            edge.kind.value,
+            f"{src.name} ({src.kind.value})",
+            f"{tgt.name} ({tgt.kind.value})",
+        ]
+        for edge, src, tgt in results
+    ]
+    print(format_table(rows, headers=["Kind", "Source", "Target"]))
+    if len(results) >= limit:
+        err(f"(showing first {limit} results; use --limit to change)")
+    return 0

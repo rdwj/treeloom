@@ -153,8 +153,8 @@ class TestDiffErrors:
             after=after_cpg,
             as_json=False,
         )
-        rc = run_cmd(args, cfg)
-        assert rc == 1
+        with pytest.raises(FileNotFoundError):
+            run_cmd(args, cfg)
 
     def test_missing_after_file(
         self, before_cpg: Path, tmp_path: Path, cfg: Config,
@@ -164,5 +164,76 @@ class TestDiffErrors:
             after=tmp_path / "nonexistent.json",
             as_json=False,
         )
+        with pytest.raises(FileNotFoundError):
+            run_cmd(args, cfg)
+
+
+class TestDiffPathOptions:
+    """Tests for --match-by-basename and --strip-prefix flags."""
+
+    def test_match_by_basename_identical_cpgs(
+        self,
+        before_cpg: Path,
+        cfg: Config,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        # Same CPG compared against itself with --match-by-basename should show no diff
+        args = argparse.Namespace(
+            before=before_cpg,
+            after=before_cpg,
+            as_json=False,
+            strip_prefix=None,
+            match_by_basename=True,
+        )
         rc = run_cmd(args, cfg)
-        assert rc == 1
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "New functions" not in out
+        assert "Removed functions" not in out
+
+    def test_match_by_basename_cross_dir(
+        self, tmp_path: Path, cfg: Config, capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        # Build the same source file into two different subdirs to simulate
+        # path difference — functions should match by basename, producing no diff
+        src = FIXTURES / "simple_function.py"
+        dir_a = tmp_path / "dir_a"
+        dir_b = tmp_path / "dir_b"
+        dir_a.mkdir()
+        dir_b.mkdir()
+        cpg_a = _build_cpg(src, dir_a / "cpg.json", cfg)
+        cpg_b = _build_cpg(src, dir_b / "cpg.json", cfg)
+
+        args = argparse.Namespace(
+            before=cpg_a,
+            after=cpg_b,
+            as_json=False,
+            strip_prefix=None,
+            match_by_basename=True,
+        )
+        rc = run_cmd(args, cfg)
+        assert rc == 0
+        out = capsys.readouterr().out
+        # Same source, same functions — no additions/removals by basename
+        assert "New functions" not in out
+        assert "Removed functions" not in out
+
+    def test_strip_prefix_json(
+        self,
+        before_cpg: Path,
+        after_cpg: Path,
+        cfg: Config,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        args = argparse.Namespace(
+            before=before_cpg,
+            after=after_cpg,
+            as_json=True,
+            strip_prefix="/nonexistent/prefix/",
+            match_by_basename=False,
+        )
+        rc = run_cmd(args, cfg)
+        assert rc == 0
+        data = json.loads(capsys.readouterr().out)
+        # Strip of non-matching prefix changes nothing functional
+        assert "summary" in data

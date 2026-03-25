@@ -8,6 +8,7 @@ from pathlib import Path
 
 from treeloom.cli._util import err, format_table, json_dumps, load_cpg, node_to_dict
 from treeloom.cli.config import Config
+from treeloom.graph.cpg import CodePropertyGraph
 from treeloom.model.nodes import CpgNode, NodeKind
 
 
@@ -22,6 +23,19 @@ def register(subparsers: argparse._SubParsersAction) -> None:  # type: ignore[ty
     p.add_argument("--file", "-f", metavar="PATH", help="Filter by file path (substring)")
     p.add_argument("--json", dest="as_json", action="store_true", help="Output as JSON")
     p.add_argument("--limit", "-l", type=int, default=None, help="Max results")
+    p.add_argument(
+        "--scope", metavar="NAME",
+        help="Filter to nodes whose scope chain includes a node with this name",
+    )
+    p.add_argument("--count", action="store_true", help="Print count only, not the table")
+    p.add_argument(
+        "--annotation", metavar="KEY",
+        help="Filter to nodes that have this annotation key",
+    )
+    p.add_argument(
+        "--annotation-value", metavar="VALUE", dest="annotation_value",
+        help="Combined with --annotation: only match when the annotation equals this value",
+    )
     p.set_defaults(func=run_query)
 
 
@@ -39,8 +53,29 @@ def _parse_kinds(raw: list[str] | None) -> list[NodeKind] | None:
     return kinds
 
 
-def _matches(node: CpgNode, kinds: list[NodeKind] | None, name_re: re.Pattern | None,  # type: ignore[type-arg]
-             file_sub: str | None) -> bool:
+def _scope_matches(cpg: CodePropertyGraph, node: CpgNode, scope_name: str) -> bool:
+    """Return True if any ancestor in the scope chain has a name matching *scope_name*."""
+    current = node
+    while current.scope is not None:
+        parent = cpg.scope_of(current.id)
+        if parent is None:
+            break
+        if parent.name == scope_name:
+            return True
+        current = parent
+    return False
+
+
+def _matches(
+    node: CpgNode,
+    kinds: list[NodeKind] | None,
+    name_re: re.Pattern | None,  # type: ignore[type-arg]
+    file_sub: str | None,
+    scope_name: str | None = None,
+    annotation_key: str | None = None,
+    annotation_value: str | None = None,
+    cpg: CodePropertyGraph | None = None,
+) -> bool:
     if kinds is not None and node.kind not in kinds:
         return False
     if name_re is not None and not name_re.search(node.name):
@@ -50,15 +85,20 @@ def _matches(node: CpgNode, kinds: list[NodeKind] | None, name_re: re.Pattern | 
             return False
         if file_sub not in str(node.location.file):
             return False
+    if scope_name is not None and cpg is not None:
+        if not _scope_matches(cpg, node, scope_name):
+            return False
+    if annotation_key is not None and cpg is not None:
+        val = cpg.get_annotation(node.id, annotation_key)
+        if val is None:
+            return False
+        if annotation_value is not None and str(val) != annotation_value:
+            return False
     return True
 
 
 def run_query(args: argparse.Namespace, cfg: Config) -> int:
-    try:
-        cpg = load_cpg(args.cpg_file)
-    except FileNotFoundError:
-        err(f"File not found: {args.cpg_file}")
-        return 1
+    cpg = load_cpg(args.cpg_file)
 
     kinds = _parse_kinds(args.kind)
 
@@ -72,13 +112,27 @@ def run_query(args: argparse.Namespace, cfg: Config) -> int:
 
     file_sub = args.file
     limit = args.limit if args.limit is not None else cfg.query_limit
+    scope_name: str | None = getattr(args, "scope", None)
+    count_only: bool = getattr(args, "count", False)
+    annotation_key: str | None = getattr(args, "annotation", None)
+    annotation_value: str | None = getattr(args, "annotation_value", None)
 
     results: list[CpgNode] = []
     for node in cpg.nodes():
-        if _matches(node, kinds, name_re, file_sub):
+        if _matches(
+            node, kinds, name_re, file_sub,
+            scope_name=scope_name,
+            annotation_key=annotation_key,
+            annotation_value=annotation_value,
+            cpg=cpg,
+        ):
             results.append(node)
-            if len(results) >= limit:
+            if not count_only and len(results) >= limit:
                 break
+
+    if count_only:
+        print(len(results))
+        return 0
 
     if args.as_json:
         print(json_dumps([node_to_dict(n) for n in results]))

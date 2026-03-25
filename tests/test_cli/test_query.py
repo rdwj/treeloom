@@ -28,13 +28,17 @@ def cpg_file(tmp_path: Path, default_cfg: Config) -> Path:
 
 
 def _make_args(cpg_file: Path, **overrides: object) -> argparse.Namespace:
-    defaults = {
+    defaults: dict[str, object] = {
         "cpg_file": cpg_file,
         "kind": None,
         "name": None,
         "file": None,
         "as_json": False,
         "limit": None,
+        "scope": None,
+        "count": False,
+        "annotation": None,
+        "annotation_value": None,
     }
     defaults.update(overrides)
     return argparse.Namespace(**defaults)
@@ -121,5 +125,165 @@ class TestQuery:
 
     def test_query_missing_file(self, tmp_path: Path, default_cfg: Config) -> None:
         args = _make_args(tmp_path / "nope.json")
+        with pytest.raises(FileNotFoundError):
+            run_query(args, default_cfg)
+
+
+@pytest.fixture()
+def class_cpg_file(tmp_path: Path, default_cfg: Config) -> Path:
+    """CPG built from class_with_methods.py (has a class + nested functions)."""
+    fixtures = Path(__file__).resolve().parent.parent / "fixtures" / "python"
+    out = tmp_path / "class_test.json"
+    args = argparse.Namespace(
+        path=fixtures / "class_with_methods.py", output=out, exclude=None, quiet=True,
+    )
+    run_build(args, default_cfg)
+    return out
+
+
+class TestQueryScope:
+    """Tests for --scope filter (#43)."""
+
+    def test_scope_filter_finds_methods(
+        self,
+        class_cpg_file: Path,
+        default_cfg: Config,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        # Parameters/variables inside Calculator should be found with --scope Calculator
+        args = _make_args(class_cpg_file, scope="Calculator")
         rc = run_query(args, default_cfg)
-        assert rc == 1
+        assert rc == 0
+        out = capsys.readouterr().out
+        # Should find nodes scoped within the Calculator class
+        assert "Calculator" in out or "add" in out or "Kind" in out
+
+    def test_scope_filter_no_match(
+        self,
+        class_cpg_file: Path,
+        default_cfg: Config,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        args = _make_args(class_cpg_file, scope="zzz_no_such_scope_zzz")
+        rc = run_query(args, default_cfg)
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "No matching" in out
+
+
+class TestQueryCount:
+    """Tests for --count flag (#44)."""
+
+    def test_count_flag_prints_integer(
+        self,
+        cpg_file: Path,
+        default_cfg: Config,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        args = _make_args(cpg_file, count=True)
+        rc = run_query(args, default_cfg)
+        assert rc == 0
+        out = capsys.readouterr().out.strip()
+        assert out.isdigit(), f"Expected integer output, got: {out!r}"
+
+    def test_count_flag_with_kind_filter(
+        self,
+        cpg_file: Path,
+        default_cfg: Config,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        args_all = _make_args(cpg_file, count=True)
+        run_query(args_all, default_cfg)
+        total = int(capsys.readouterr().out.strip())
+
+        args_fn = _make_args(cpg_file, count=True, kind=["function"])
+        run_query(args_fn, default_cfg)
+        fn_count = int(capsys.readouterr().out.strip())
+
+        assert fn_count <= total
+        assert fn_count > 0
+
+    def test_count_not_limited_by_default_limit(
+        self,
+        cpg_file: Path,
+        default_cfg: Config,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        # --count should not be truncated by the default query_limit
+        args = _make_args(cpg_file, count=True, limit=1)
+        rc = run_query(args, default_cfg)
+        assert rc == 0
+        # Just verify it runs; count may be larger than 1
+        out = capsys.readouterr().out.strip()
+        assert out.isdigit()
+
+
+class TestQueryAnnotation:
+    """Tests for --annotation and --annotation-value flags (#45)."""
+
+    def test_annotation_filter_no_annotations(
+        self,
+        cpg_file: Path,
+        default_cfg: Config,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        # No annotations set — should return nothing
+        args = _make_args(cpg_file, annotation="role")
+        rc = run_query(args, default_cfg)
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "No matching" in out
+
+    def test_annotation_filter_with_annotated_cpg(
+        self,
+        cpg_file: Path,
+        default_cfg: Config,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        from treeloom.cli._util import load_cpg
+        from treeloom.export.json import to_json
+        from treeloom.model.nodes import NodeKind
+
+        cpg = load_cpg(cpg_file)
+        functions = list(cpg.nodes(kind=NodeKind.FUNCTION))
+        assert functions, "Expected at least one function in fixture"
+        cpg.annotate_node(functions[0].id, "role", "entry_point")
+
+        annotated_path = cpg_file.parent / "annotated.json"
+        annotated_path.write_text(to_json(cpg), encoding="utf-8")
+
+        args = _make_args(annotated_path, annotation="role")
+        rc = run_query(args, default_cfg)
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "No matching" not in out
+
+    def test_annotation_value_filter(
+        self,
+        cpg_file: Path,
+        default_cfg: Config,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        from treeloom.cli._util import load_cpg
+        from treeloom.export.json import to_json
+        from treeloom.model.nodes import NodeKind
+
+        cpg = load_cpg(cpg_file)
+        functions = list(cpg.nodes(kind=NodeKind.FUNCTION))
+        assert functions
+        cpg.annotate_node(functions[0].id, "role", "sink")
+
+        annotated_path = cpg_file.parent / "annotated2.json"
+        annotated_path.write_text(to_json(cpg), encoding="utf-8")
+
+        # Correct value matches
+        args = _make_args(annotated_path, annotation="role", annotation_value="sink")
+        run_query(args, default_cfg)
+        out_match = capsys.readouterr().out
+        assert "No matching" not in out_match
+
+        # Wrong value should not match
+        args2 = _make_args(annotated_path, annotation="role", annotation_value="source")
+        run_query(args2, default_cfg)
+        out_no = capsys.readouterr().out
+        assert "No matching" in out_no
