@@ -34,6 +34,7 @@ def _make_args(cpg_file: Path, **overrides: object) -> argparse.Namespace:
         "name": None,
         "file": None,
         "as_json": False,
+        "output_format": "table",
         "limit": None,
         "scope": None,
         "count": False,
@@ -287,3 +288,70 @@ class TestQueryAnnotation:
         run_query(args2, default_cfg)
         out_no = capsys.readouterr().out
         assert "No matching" in out_no
+
+
+class TestQueryOutputFormat:
+    """Tests for --output-format flag on the query command (issue #53)."""
+
+    def test_csv_output(
+        self, cpg_file: Path, default_cfg: Config, capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        args = _make_args(cpg_file, output_format="csv", kind=["function"])
+        rc = run_query(args, default_cfg)
+        assert rc == 0
+        out = capsys.readouterr().out
+        lines = [line for line in out.strip().split("\n") if line]
+        # First line is the header row
+        assert lines[0] == "kind,name,location", f"Unexpected CSV header: {lines[0]!r}"
+        # All data rows should start with "function"
+        for line in lines[1:]:
+            assert line.startswith("function,"), f"Unexpected row: {line!r}"
+
+    def test_tsv_output(
+        self, cpg_file: Path, default_cfg: Config, capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        args = _make_args(cpg_file, output_format="tsv", kind=["function"])
+        rc = run_query(args, default_cfg)
+        assert rc == 0
+        out = capsys.readouterr().out
+        lines = [line for line in out.strip().split("\n") if line]
+        assert lines[0] == "kind\tname\tlocation", f"Unexpected TSV header: {lines[0]!r}"
+        for line in lines[1:]:
+            cols = line.split("\t")
+            assert cols[0] == "function", f"Unexpected kind column: {cols[0]!r}"
+
+    def test_jsonl_output(
+        self, cpg_file: Path, default_cfg: Config, capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        args = _make_args(cpg_file, output_format="jsonl", kind=["function"])
+        rc = run_query(args, default_cfg)
+        assert rc == 0
+        out = capsys.readouterr().out
+        lines = [line for line in out.strip().split("\n") if line]
+        assert lines, "Expected at least one JSONL line"
+        for line in lines:
+            obj = json.loads(line)
+            assert obj["kind"] == "function"
+            assert "name" in obj
+            assert "location" in obj
+
+    def test_json_alias_still_works(
+        self, cpg_file: Path, default_cfg: Config, capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """--json flag should remain a working alias for --output-format json."""
+        args = _make_args(cpg_file, as_json=True, kind=["function"])
+        rc = run_query(args, default_cfg)
+        assert rc == 0
+        data = json.loads(capsys.readouterr().out)
+        assert isinstance(data, list)
+        for item in data:
+            assert item["kind"] == "function"
+
+    def test_output_format_json_explicit(
+        self, cpg_file: Path, default_cfg: Config, capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        args = _make_args(cpg_file, output_format="json", kind=["function"])
+        rc = run_query(args, default_cfg)
+        assert rc == 0
+        data = json.loads(capsys.readouterr().out)
+        assert isinstance(data, list)

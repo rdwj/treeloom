@@ -4,9 +4,17 @@ from __future__ import annotations
 
 import argparse
 import re
+import sys
 from pathlib import Path
 
-from treeloom.cli._util import err, format_table, json_dumps, load_cpg
+from treeloom.cli._util import (
+    OUTPUT_FORMATS,
+    err,
+    format_output,
+    format_table,
+    json_dumps,
+    load_cpg,
+)
 from treeloom.cli.config import Config
 from treeloom.model.edges import EdgeKind
 
@@ -28,7 +36,15 @@ def register(subparsers: argparse._SubParsersAction) -> None:  # type: ignore[ty
         "--target", "-t", metavar="PATTERN",
         help="Filter edges where target node name matches (regex)",
     )
-    p.add_argument("--json", dest="as_json", action="store_true", help="Output as JSON")
+    p.add_argument(
+        "--output-format", dest="output_format", default="table",
+        choices=OUTPUT_FORMATS,
+        help="Output format: table (default), json, csv, tsv, jsonl",
+    )
+    p.add_argument(
+        "--json", dest="as_json", action="store_true",
+        help="Output as JSON (alias for --output-format json)",
+    )
     p.add_argument(
         "--limit", "-l", type=int, default=_DEFAULT_LIMIT,
         help=f"Max results (default {_DEFAULT_LIMIT})",
@@ -93,7 +109,10 @@ def run_cmd(args: argparse.Namespace, _cfg: Config | None = None) -> int:
         if len(results) >= limit:
             break
 
-    if args.as_json:
+    # --json is a legacy alias for --output-format json
+    fmt: str = "json" if args.as_json else getattr(args, "output_format", "table")
+
+    if fmt == "json":
         data = [
             {
                 "kind": edge.kind.value,
@@ -110,15 +129,31 @@ def run_cmd(args: argparse.Namespace, _cfg: Config | None = None) -> int:
         print("No matching edges.")
         return 0
 
-    rows = [
-        [
-            edge.kind.value,
-            f"{src.name} ({src.kind.value})",
-            f"{tgt.name} ({tgt.kind.value})",
+    if fmt == "table":
+        rows = [
+            [
+                edge.kind.value,
+                f"{src.name} ({src.kind.value})",
+                f"{tgt.name} ({tgt.kind.value})",
+            ]
+            for edge, src, tgt in results
         ]
-        for edge, src, tgt in results
-    ]
-    print(format_table(rows, headers=["Kind", "Source", "Target"]))
+        print(format_table(rows, headers=["Kind", "Source", "Target"]))
+    else:
+        headers = ["kind", "source", "target"]
+        rows_dicts = [
+            {
+                "kind": edge.kind.value,
+                "source": f"{src.name} ({src.kind.value})",
+                "target": f"{tgt.name} ({tgt.kind.value})",
+            }
+            for edge, src, tgt in results
+        ]
+        output = format_output(rows_dicts, headers, fmt)
+        sys.stdout.write(output)
+        if output and not output.endswith("\n"):
+            sys.stdout.write("\n")
+
     if len(results) >= limit:
         err(f"(showing first {limit} results; use --limit to change)")
     return 0

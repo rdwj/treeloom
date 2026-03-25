@@ -37,6 +37,7 @@ def _make_args(cpg_file: Path, **overrides: object) -> argparse.Namespace:
         "source": None,
         "target": None,
         "as_json": False,
+        "output_format": "table",
         "limit": 50,
     }
     defaults.update(overrides)
@@ -158,3 +159,59 @@ class TestEdgesCommand:
         assert rc == 0
         out = capsys.readouterr().out
         assert "No matching" in out
+
+
+class TestEdgesOutputFormat:
+    """Tests for --output-format flag on the edges command (issue #53)."""
+
+    def test_csv_output(
+        self, cpg_file: Path, cfg: Config, capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        args = _make_args(cpg_file, output_format="csv", kind=["contains"], limit=5)
+        rc = run_cmd(args, cfg)
+        assert rc == 0
+        out = capsys.readouterr().out
+        lines = [line for line in out.strip().split("\n") if line]
+        assert lines[0] == "kind,source,target", f"Unexpected CSV header: {lines[0]!r}"
+        for line in lines[1:]:
+            assert "contains" in line, f"Unexpected row: {line!r}"
+
+    def test_tsv_output(
+        self, cpg_file: Path, cfg: Config, capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        args = _make_args(cpg_file, output_format="tsv", kind=["contains"], limit=5)
+        rc = run_cmd(args, cfg)
+        assert rc == 0
+        out = capsys.readouterr().out
+        lines = [line for line in out.strip().split("\n") if line]
+        assert lines[0] == "kind\tsource\ttarget", f"Unexpected TSV header: {lines[0]!r}"
+        for line in lines[1:]:
+            cols = line.split("\t")
+            assert cols[0] == "contains", f"Unexpected kind: {cols[0]!r}"
+
+    def test_jsonl_output(
+        self, cpg_file: Path, cfg: Config, capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        args = _make_args(cpg_file, output_format="jsonl", kind=["contains"], limit=5)
+        rc = run_cmd(args, cfg)
+        assert rc == 0
+        out = capsys.readouterr().out
+        lines = [line for line in out.strip().split("\n") if line]
+        assert lines, "Expected at least one JSONL line"
+        for line in lines:
+            obj = json.loads(line)
+            assert obj["kind"] == "contains"
+            assert "source" in obj
+            assert "target" in obj
+
+    def test_json_alias_still_works(
+        self, cpg_file: Path, cfg: Config, capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """--json flag should remain a working alias for --output-format json."""
+        args = _make_args(cpg_file, as_json=True, kind=["contains"])
+        rc = run_cmd(args, cfg)
+        assert rc == 0
+        data = json.loads(capsys.readouterr().out)
+        assert isinstance(data, list)
+        for item in data:
+            assert item["kind"] == "contains"

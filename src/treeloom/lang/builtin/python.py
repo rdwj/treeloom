@@ -522,14 +522,34 @@ class PythonVisitor(TreeSitterVisitor):
             # the attribute access so data flow can propagate through it.
             attr_text = self._node_text(node, ctx.source)
             loc = self._location(node, ctx.file_path)
+
+            # Field sensitivity: register the full dotted name in defined_vars
+            # so that `request.args` and `request.form` are tracked as
+            # separate variables.  Look up the full text first so that any
+            # prior definition of the dotted name is reused rather than
+            # creating a duplicate node.
+            existing_id = ctx.defined_vars.get(attr_text)
+            if existing_id is not None:
+                return existing_id
+
             attr_id = ctx.emitter.emit_variable(attr_text, loc, ctx.current_scope)
-            # Wire data from the receiver object, if it is a known variable.
+            ctx.defined_vars[attr_text] = attr_id
+
+            # Wire data from the receiver object.  Handle three receiver types:
+            #   1. bare identifier (e.g. `request.form`)
+            #   2. attribute access (e.g. `request.form.data`) — recurse
+            #   3. subscript (e.g. `obj['key'].attr`) — recurse
             obj_node = node.child_by_field_name("object")
-            if obj_node is not None and obj_node.type == "identifier":
-                obj_name = self._node_text(obj_node, ctx.source)
-                obj_def_id = ctx.defined_vars.get(obj_name)
-                if obj_def_id is not None:
-                    ctx.emitter.emit_data_flow(obj_def_id, attr_id)
+            if obj_node is not None:
+                if obj_node.type == "identifier":
+                    obj_name = self._node_text(obj_node, ctx.source)
+                    obj_def_id = ctx.defined_vars.get(obj_name)
+                    if obj_def_id is not None:
+                        ctx.emitter.emit_data_flow(obj_def_id, attr_id)
+                elif obj_node.type in ("attribute", "subscript"):
+                    receiver_id = self._visit_expression(obj_node, ctx)
+                    if receiver_id is not None:
+                        ctx.emitter.emit_data_flow(receiver_id, attr_id)
             return attr_id
 
         if node.type == "subscript":
@@ -542,11 +562,16 @@ class PythonVisitor(TreeSitterVisitor):
             # Wire data from the object being subscripted, if it is a
             # resolvable identifier.
             val_node = node.child_by_field_name("value")
-            if val_node is not None and val_node.type == "identifier":
-                val_name = self._node_text(val_node, ctx.source)
-                val_def_id = ctx.defined_vars.get(val_name)
-                if val_def_id is not None:
-                    ctx.emitter.emit_data_flow(val_def_id, sub_id)
+            if val_node is not None:
+                if val_node.type == "identifier":
+                    val_name = self._node_text(val_node, ctx.source)
+                    val_def_id = ctx.defined_vars.get(val_name)
+                    if val_def_id is not None:
+                        ctx.emitter.emit_data_flow(val_def_id, sub_id)
+                elif val_node.type in ("attribute", "subscript"):
+                    val_id = self._visit_expression(val_node, ctx)
+                    if val_id is not None:
+                        ctx.emitter.emit_data_flow(val_id, sub_id)
             # Also visit the subscript key so any nested calls/refs are picked up.
             key_node = node.child_by_field_name("subscript")
             if key_node is not None:
@@ -706,21 +731,27 @@ class PythonVisitor(TreeSitterVisitor):
         if func_node is None:
             return None
 
-        # When the function is an attribute access (e.g. `obj.method`), check
-        # whether the receiver object is itself a call (chained method call).
-        # If so, recursively visit the inner call first so we can wire data
-        # flow from it to this (outer) call.  We also use only the method name
-        # portion for the outer call's name rather than the full receiver
-        # expression text, which would be both verbose and misleading.
+        # When the function is an attribute access (e.g. `obj.method`), we
+        # handle three receiver cases to wire data flow correctly:
+        #
+        # 1. Receiver is a call (chained method call, e.g. `foo().bar()`):
+        #    Visit the inner call and wire its result to the outer call.
+        #    Use "<inner_func>.<method>" as the name for the outer call.
+        #
+        # 2. Receiver is an attribute (e.g. `request.form.get()`):
+        #    Visit the receiver attribute (which itself may recurse) and wire
+        #    data flow from that VARIABLE node to this call.  Use the full
+        #    dotted text (e.g. "request.form.get") as the call name.
+        #
+        # 3. Receiver is a simple identifier or anything else:
+        #    Use the full attribute text as the call name (existing behaviour).
         receiver_call_id: NodeId | None = None
         if func_node.type == "attribute":
             obj_node = func_node.child_by_field_name("object")
             attr_node = func_node.child_by_field_name("attribute")
             if obj_node is not None and obj_node.type == "call":
-                # Recursively visit the inner call before emitting the outer one
+                # Case 1: chained call — recursively visit the inner call.
                 receiver_call_id = self._visit_expression(obj_node, ctx)
-                # Build a name: <inner_func_name>.<method> so the outer call is
-                # still identifiable (e.g. "c.execute.fetchone").
                 method_name = (
                     self._node_text(attr_node, ctx.source)
                     if attr_node is not None
@@ -732,6 +763,12 @@ class PythonVisitor(TreeSitterVisitor):
                     if inner_func_name
                     else method_name
                 )
+            elif obj_node is not None and obj_node.type == "attribute":
+                # Case 2: receiver is itself an attribute (chained attribute).
+                # Visit the receiver so it emits its VARIABLE node and wires
+                # its own receiver chain, then use the full text as this call's name.
+                receiver_call_id = self._visit_expression(obj_node, ctx)
+                target_name = self._node_text(func_node, ctx.source)
             else:
                 target_name = self._node_text(func_node, ctx.source)
         else:

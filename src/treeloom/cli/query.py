@@ -4,9 +4,18 @@ from __future__ import annotations
 
 import argparse
 import re
+import sys
 from pathlib import Path
 
-from treeloom.cli._util import err, format_table, json_dumps, load_cpg, node_to_dict
+from treeloom.cli._util import (
+    OUTPUT_FORMATS,
+    err,
+    format_output,
+    format_table,
+    json_dumps,
+    load_cpg,
+    node_to_dict,
+)
 from treeloom.cli.config import Config
 from treeloom.graph.cpg import CodePropertyGraph
 from treeloom.model.nodes import CpgNode, NodeKind
@@ -21,7 +30,15 @@ def register(subparsers: argparse._SubParsersAction) -> None:  # type: ignore[ty
     )
     p.add_argument("--name", "-n", metavar="PATTERN", help="Filter by name (regex)")
     p.add_argument("--file", "-f", metavar="PATH", help="Filter by file path (substring)")
-    p.add_argument("--json", dest="as_json", action="store_true", help="Output as JSON")
+    p.add_argument(
+        "--output-format", dest="output_format", default="table",
+        choices=OUTPUT_FORMATS,
+        help="Output format: table (default), json, csv, tsv, jsonl",
+    )
+    p.add_argument(
+        "--json", dest="as_json", action="store_true",
+        help="Output as JSON (alias for --output-format json)",
+    )
     p.add_argument("--limit", "-l", type=int, default=None, help="Max results")
     p.add_argument(
         "--scope", metavar="NAME",
@@ -134,7 +151,10 @@ def run_query(args: argparse.Namespace, cfg: Config) -> int:
         print(len(results))
         return 0
 
-    if args.as_json:
+    # --json is a legacy alias for --output-format json
+    fmt: str = "json" if args.as_json else getattr(args, "output_format", "table")
+
+    if fmt == "json":
         print(json_dumps([node_to_dict(n) for n in results]))
         return 0
 
@@ -142,13 +162,23 @@ def run_query(args: argparse.Namespace, cfg: Config) -> int:
         print("No matching nodes.")
         return 0
 
-    rows: list[list[str]] = []
+    headers = ["kind", "name", "location"]
+    rows_dicts = []
     for node in results:
         loc = node.location
         loc_str = f"{loc.file}:{loc.line}" if loc else "-"
-        rows.append([node.kind.value, node.name, loc_str])
+        rows_dicts.append({"kind": node.kind.value, "name": node.name, "location": loc_str})
 
-    print(format_table(rows, headers=["Kind", "Name", "Location"]))
+    if fmt == "table":
+        # Use capitalized headers for the human-readable table
+        table_rows = [[r["kind"], r["name"], r["location"]] for r in rows_dicts]
+        print(format_table(table_rows, headers=["Kind", "Name", "Location"]))
+    else:
+        output = format_output(rows_dicts, headers, fmt)
+        sys.stdout.write(output)
+        if output and not output.endswith("\n"):
+            sys.stdout.write("\n")
+
     if len(results) >= limit:
         err(f"(showing first {limit} results; use --limit to change)")
     return 0

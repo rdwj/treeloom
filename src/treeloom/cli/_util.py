@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import csv
+import io
 import json
 import sys
 from pathlib import Path
@@ -93,3 +95,50 @@ def json_dumps(obj: object) -> str:
 def format_error(code: str, message: str, **extra: Any) -> str:
     """Format an error as JSON for --json-errors output."""
     return json.dumps({"error": code, "message": message, **extra})
+
+
+# Supported output formats for --output-format
+OUTPUT_FORMATS = ("table", "json", "csv", "tsv", "jsonl")
+
+
+def format_output(
+    rows: list[dict[str, Any]],
+    headers: list[str],
+    fmt: str,
+) -> str:
+    """Format *rows* (list of dicts) according to *fmt*.
+
+    Supported formats: ``table``, ``json``, ``csv``, ``tsv``, ``jsonl``.
+
+    *headers* determines the column order for tabular formats and the keys
+    included in JSON/JSONL output (in the given order).  Dict keys not in
+    *headers* are silently ignored.
+
+    Returns the formatted string (no trailing newline for table/json;
+    each line already ends with ``\\n`` for csv/tsv/jsonl).
+    """
+    if fmt == "table":
+        table_rows = [[str(r.get(h, "")) for h in headers] for r in rows]
+        return format_table(table_rows, headers=headers)
+
+    if fmt == "json":
+        ordered = [{h: r.get(h) for h in headers} for r in rows]
+        return json.dumps(ordered, indent=2, default=str)
+
+    if fmt in ("csv", "tsv"):
+        delimiter = "," if fmt == "csv" else "\t"
+        buf = io.StringIO()
+        writer = csv.writer(buf, delimiter=delimiter, lineterminator="\n")
+        writer.writerow(headers)
+        for r in rows:
+            writer.writerow([str(r.get(h, "")) for h in headers])
+        return buf.getvalue()
+
+    if fmt == "jsonl":
+        lines = [
+            json.dumps({h: r.get(h) for h in headers}, default=str)
+            for r in rows
+        ]
+        return "\n".join(lines) + ("\n" if lines else "")
+
+    raise ValueError(f"Unknown output format: {fmt!r}")

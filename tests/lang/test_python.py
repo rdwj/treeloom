@@ -899,3 +899,103 @@ def serialize(items):
         assert any("get_items" in c for c in call_names), (
             f"Expected get_items() call inside generator, got {call_names}"
         )
+
+
+class TestChainedAttributeDFG:
+    """Issue #51: chained attribute receivers should propagate data flow."""
+
+    def test_request_form_get_chain(self):
+        """request -> request.form -> request.form.get() should all be wired."""
+        source = b"""
+def handle(request):
+    username = request.form.get('username')
+    return username
+"""
+        cpg = CPGBuilder().add_source(source, "chained_attr.py").build()
+        pairs = _edge_pairs(cpg, EdgeKind.DATA_FLOWS_TO)
+
+        # request (param) should flow into request.form (attribute variable)
+        req_to_form = [(s, t) for s, t in pairs if s == "request" and "form" in t]
+        assert req_to_form, (
+            f"Expected 'request' -> 'request.form', got DATA_FLOWS_TO pairs: {pairs}"
+        )
+
+        # request.form (attribute variable) should flow into the .get() call
+        form_text = req_to_form[0][1]
+        form_to_get = [(s, t) for s, t in pairs if s == form_text and "get" in t]
+        assert form_to_get, (
+            f"Expected {form_text!r} -> '.get()', got DATA_FLOWS_TO pairs: {pairs}"
+        )
+
+    def test_triple_chained_attribute(self):
+        """a.b.c should chain: a -> a.b -> a.b.c."""
+        source = b"""
+def process(obj):
+    val = obj.first.second
+    return val
+"""
+        cpg = CPGBuilder().add_source(source, "triple_attr.py").build()
+        pairs = _edge_pairs(cpg, EdgeKind.DATA_FLOWS_TO)
+
+        # obj -> obj.first
+        obj_to_first = [(s, t) for s, t in pairs if s == "obj" and "first" in t]
+        assert obj_to_first, (
+            f"Expected 'obj' -> 'obj.first', got pairs: {pairs}"
+        )
+
+        # obj.first -> obj.first.second
+        first_text = obj_to_first[0][1]
+        first_to_second = [(s, t) for s, t in pairs if s == first_text and "second" in t]
+        assert first_to_second, (
+            f"Expected {first_text!r} -> 'obj.first.second', got pairs: {pairs}"
+        )
+
+
+class TestFieldSensitivity:
+    """Issue #52: obj.safe_field and obj.unsafe_field should be separate VARIABLE nodes."""
+
+    def test_separate_variable_nodes_for_different_fields(self):
+        """Two different fields on the same object should produce separate VARIABLE nodes."""
+        source = b"""
+def process(obj):
+    x = obj.safe_field
+    y = obj.unsafe_field
+    return x, y
+"""
+        cpg = CPGBuilder().add_source(source, "field_sens.py").build()
+        var_names = _node_names(cpg, NodeKind.VARIABLE)
+        assert "obj.safe_field" in var_names or any("safe_field" in n for n in var_names), (
+            f"Expected a variable for obj.safe_field, got: {var_names}"
+        )
+        assert "obj.unsafe_field" in var_names or any("unsafe_field" in n for n in var_names), (
+            f"Expected a variable for obj.unsafe_field, got: {var_names}"
+        )
+        # The two field nodes must be distinct
+        safe_nodes = [n for n in cpg.nodes(kind=NodeKind.VARIABLE) if "safe_field" in n.name]
+        unsafe_nodes = [n for n in cpg.nodes(kind=NodeKind.VARIABLE) if "unsafe_field" in n.name]
+        assert safe_nodes and unsafe_nodes
+        assert safe_nodes[0].id != unsafe_nodes[0].id, (
+            "safe_field and unsafe_field should be separate VARIABLE nodes"
+        )
+
+    def test_separate_dfg_chains_per_field(self):
+        """Taint on obj.unsafe_field must not reach obj.safe_field."""
+        source = b"""
+def process(obj):
+    x = obj.safe_field
+    y = obj.unsafe_field
+    return x, y
+"""
+        cpg = CPGBuilder().add_source(source, "field_taint.py").build()
+        pairs = _edge_pairs(cpg, EdgeKind.DATA_FLOWS_TO)
+
+        # There should be no edge from a safe_field node to an unsafe_field node
+        # or vice versa — they are separate chains.
+        cross_field = [
+            (s, t) for s, t in pairs
+            if ("safe_field" in s and "unsafe_field" in t)
+            or ("unsafe_field" in s and "safe_field" in t)
+        ]
+        assert not cross_field, (
+            f"safe_field and unsafe_field should not share data flow, got: {cross_field}"
+        )
