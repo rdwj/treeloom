@@ -205,6 +205,20 @@ mypy src/treeloom/
 
 ## Changelog
 
+### Version 0.2.3
+
+- Fixed data flow through chained method calls (`.format().fetchone()` pattern)
+- New `treeloom edges` command for querying edges by kind, source/target name
+- `treeloom diff --match-by-basename` and `--strip-prefix` for cross-directory comparison
+- `treeloom query --scope`, `--count`, `--annotation`, `--annotation-value` filters
+- Fixed `--json-errors` flag (errors now propagate to main handler for JSON formatting)
+- Build `--progress` skips unsupported file types, `--language` filter restricts parsing
+- DOT `--edge-kind` filter prunes disconnected nodes
+- Import nodes hidden by default in HTML visualization (togglable "Imports" layer)
+- `treeloom viz --exclude-kind` for consumer-controlled node filtering
+- Large graph warning (>500 nodes) suggesting subgraph extraction
+- 821 tests
+
 ### Version 0.2.2
 
 - Fixed data flow tracking through string formatting (.format(), % operator, f-strings)
