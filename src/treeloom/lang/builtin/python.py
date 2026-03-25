@@ -172,17 +172,31 @@ class PythonVisitor(TreeSitterVisitor):
         loc = self._location(node, ctx.file_path)
         scope = ctx.current_scope
 
-        # Collect parameter names for emit_function (it creates params itself)
-        params_node = node.child_by_field_name("parameters")
-        param_names = _extract_param_names(params_node, ctx.source) if params_node else []
-
+        # Emit the function node without params -- we emit parameters manually
+        # below so we can register their NodeIds in defined_vars for later
+        # identifier lookups (e.g. when a parameter is used in a .format() call).
         func_id = ctx.emitter.emit_function(
-            func_name, loc, scope, params=param_names, is_async=is_async
+            func_name, loc, scope, params=None, is_async=is_async
         )
 
         # Now visit the body within the function scope
         ctx.scope_stack.append(func_id)
         ctx.defined_vars.push()
+
+        # Emit parameters and register them in defined_vars so identifier
+        # references (in calls, returns, assignments) resolve correctly.
+        params_node = node.child_by_field_name("parameters")
+        if params_node is not None:
+            position = 0
+            for child in params_node.children:
+                param_name = _extract_single_param_name(child, ctx.source)
+                if param_name is not None:
+                    param_loc = self._location(child, ctx.file_path)
+                    param_id = ctx.emitter.emit_parameter(
+                        param_name, param_loc, func_id, position=position
+                    )
+                    ctx.defined_vars[param_name] = param_id
+                    position += 1
 
         body = node.child_by_field_name("body")
         if body is not None:
@@ -437,6 +451,21 @@ class PythonVisitor(TreeSitterVisitor):
             loc = self._location(node, ctx.file_path)
             value = self._node_text(node, ctx.source)
             lit_type = _LITERAL_TYPES[node.type]
+
+            # Check for f-string interpolation: if the string contains
+            # {expr} interpolations, the embedded variables flow into the
+            # resulting string.  We emit a pseudo-call node instead of a
+            # plain literal so taint propagates through.
+            if node.type in ("string", "concatenated_string"):
+                interp_ids = self._collect_interpolation_ids(node, ctx)
+                if interp_ids:
+                    fstr_id = ctx.emitter.emit_call(
+                        "f-string", loc, ctx.current_scope, args=None
+                    )
+                    for iid in interp_ids:
+                        ctx.emitter.emit_data_flow(iid, fstr_id)
+                    return fstr_id
+
             return ctx.emitter.emit_literal(value, lit_type, loc, ctx.current_scope)
 
         if node.type == "identifier":
@@ -450,14 +479,47 @@ class PythonVisitor(TreeSitterVisitor):
             return None
 
         if node.type == "binary_operator":
-            # Visit both sides for any nested calls/references
             left = node.child_by_field_name("left")
             right = node.child_by_field_name("right")
-            if left:
-                self._visit_expression(left, ctx)
+            operator = node.child_by_field_name("operator")
+
+            # Detect %-formatting: "format string" % value
+            is_percent_fmt = False
+            if operator is not None:
+                is_percent_fmt = self._node_text(operator, ctx.source) == "%"
+            else:
+                # Fallback: scan unnamed children for the % token
+                for child in node.children:
+                    if not child.is_named and child.type == "%":
+                        is_percent_fmt = True
+                        break
+
+            if is_percent_fmt:
+                left_id = self._visit_expression(left, ctx) if left else None
+                # Emit a pseudo-call node to represent the % operation so
+                # taint can flow from the RHS operand(s) through the result.
+                loc = self._location(node, ctx.file_path)
+                fmt_id = ctx.emitter.emit_call(
+                    "%", loc, ctx.current_scope, args=None
+                )
+                if left_id is not None:
+                    ctx.emitter.emit_data_flow(left_id, fmt_id)
+
+                # The RHS may be a single value or a tuple of values.
+                # Wire each element individually so taint propagates from
+                # every substitution argument.
+                if right is not None:
+                    rhs_ids = self._collect_expression_ids(right, ctx)
+                    for rid in rhs_ids:
+                        ctx.emitter.emit_data_flow(rid, fmt_id)
+
+                return fmt_id
+
+            # Non-% binary operators: visit both sides for nested calls/refs
+            left_id = self._visit_expression(left, ctx) if left else None
             if right:
                 self._visit_expression(right, ctx)
-            return None
+            return left_id
 
         if node.type == "comparison_operator":
             for child in node.children:
@@ -477,6 +539,43 @@ class PythonVisitor(TreeSitterVisitor):
                 self._visit_expression(child, ctx)
 
         return None
+
+    def _collect_interpolation_ids(
+        self, node: tree_sitter.Node, ctx: _VisitContext
+    ) -> list[NodeId]:
+        """Collect NodeIds for variables referenced inside f-string interpolations."""
+        ids: list[NodeId] = []
+        for child in node.children:
+            if child.type == "interpolation":
+                for inner in child.children:
+                    if inner.is_named:
+                        expr_id = self._visit_expression(inner, ctx)
+                        if expr_id is not None:
+                            ids.append(expr_id)
+            elif child.is_named:
+                # Recurse into concatenated_string parts
+                ids.extend(self._collect_interpolation_ids(child, ctx))
+        return ids
+
+    def _collect_expression_ids(
+        self, node: tree_sitter.Node, ctx: _VisitContext
+    ) -> list[NodeId]:
+        """Visit an expression and return all leaf NodeIds.
+
+        For tuple/list nodes this visits each element and returns all IDs.
+        For a single expression it returns a one-element list (or empty if
+        no node was emitted).
+        """
+        if node.type in ("tuple", "list"):
+            ids: list[NodeId] = []
+            for child in node.children:
+                if child.is_named:
+                    eid = self._visit_expression(child, ctx)
+                    if eid is not None:
+                        ids.append(eid)
+            return ids
+        eid = self._visit_expression(node, ctx)
+        return [eid] if eid is not None else []
 
     def _visit_call_expression(
         self, node: tree_sitter.Node, ctx: _VisitContext
@@ -560,6 +659,42 @@ def _make_calls_edge(call_id: NodeId, func_id: NodeId) -> Any:
     from treeloom.model.edges import CpgEdge
 
     return CpgEdge(source=call_id, target=func_id, kind=EdgeKind.CALLS)
+
+
+def _extract_single_param_name(
+    child: tree_sitter.Node, source: bytes
+) -> str | None:
+    """Extract a parameter name from a single tree-sitter parameters child node.
+
+    Returns None for nodes that aren't parameter declarations (punctuation,
+    'self', 'cls').
+    """
+    if child.type == "identifier":
+        name = child.text.decode("utf-8", errors="replace")
+        if name not in ("self", "cls"):
+            return name
+    elif child.type == "default_parameter":
+        name_node = child.child_by_field_name("name")
+        if name_node:
+            name = name_node.text.decode("utf-8", errors="replace")
+            if name not in ("self", "cls"):
+                return name
+    elif child.type == "typed_parameter":
+        for sub in child.children:
+            if sub.type == "identifier":
+                name = sub.text.decode("utf-8", errors="replace")
+                if name not in ("self", "cls"):
+                    return name
+                break
+    elif child.type == "list_splat_pattern":
+        for sub in child.children:
+            if sub.type == "identifier":
+                return "*" + sub.text.decode("utf-8", errors="replace")
+    elif child.type == "dictionary_splat_pattern":
+        for sub in child.children:
+            if sub.type == "identifier":
+                return "**" + sub.text.decode("utf-8", errors="replace")
+    return None
 
 
 def _extract_param_names(

@@ -477,3 +477,122 @@ class TestAddDirectory:
     def test_files_property(self):
         cpg = CPGBuilder().add_directory(FIXTURES).build()
         assert len(cpg.files) >= 6
+
+
+class TestStringFormattingDataFlow:
+    """Data flow through .format(), %, and f-string operations."""
+
+    @pytest.fixture()
+    def cpg(self):
+        return _build("string_formatting.py")
+
+    def test_format_args_flow_to_call(self, cpg):
+        """format() args should have DATA_FLOWS_TO the format call node."""
+        pairs = _edge_pairs(cpg, EdgeKind.DATA_FLOWS_TO)
+        fmt_calls = [
+            n for n in cpg.nodes(kind=NodeKind.CALL)
+            if "format" in n.name
+        ]
+        assert fmt_calls, "Expected at least one .format() call node"
+        # username and password should flow into a format call
+        fmt_targets = {c.name for c in fmt_calls}
+        param_to_fmt = [
+            (src, tgt) for src, tgt in pairs
+            if tgt in fmt_targets and src in ("username", "password")
+        ]
+        assert len(param_to_fmt) >= 2, (
+            f"Expected username+password to flow to .format() call, got {param_to_fmt}"
+        )
+
+    def test_format_result_flows_to_variable(self, cpg):
+        """The .format() call result should flow to the 'query' variable."""
+        pairs = _edge_pairs(cpg, EdgeKind.DATA_FLOWS_TO)
+        fmt_to_var = [
+            (src, tgt) for src, tgt in pairs
+            if "format" in src and tgt == "query"
+        ]
+        assert fmt_to_var, "Expected .format() call to flow to 'query' variable"
+
+    def test_percent_format_flows_to_variable(self, cpg):
+        """`%` formatting should create data flow from the operand."""
+        pairs = _edge_pairs(cpg, EdgeKind.DATA_FLOWS_TO)
+        # username -> % pseudo-call -> query
+        pct_to_var = [(s, t) for s, t in pairs if s == "%" and t == "query"]
+        assert pct_to_var, "Expected % pseudo-call to flow to 'query'"
+        arg_to_pct = [(s, t) for s, t in pairs if s == "username" and t == "%"]
+        assert arg_to_pct, "Expected 'username' to flow to % pseudo-call"
+
+    def test_fstring_interpolation_flows(self, cpg):
+        """f-string interpolated variables should flow to the f-string node."""
+        pairs = _edge_pairs(cpg, EdgeKind.DATA_FLOWS_TO)
+        fstr_to_var = [(s, t) for s, t in pairs if s == "f-string" and t == "query"]
+        assert fstr_to_var, "Expected f-string node to flow to 'query'"
+        arg_to_fstr = [(s, t) for s, t in pairs if s == "username" and t == "f-string"]
+        assert arg_to_fstr, "Expected 'username' to flow to f-string node"
+
+    def test_nested_format_chains_to_outer_call(self, cpg):
+        """`.format()` nested inside c.execute() should chain data flow."""
+        pairs = _edge_pairs(cpg, EdgeKind.DATA_FLOWS_TO)
+        fmt_to_exec = [
+            (src, tgt) for src, tgt in pairs
+            if "format" in src and "execute" in tgt
+        ]
+        assert fmt_to_exec, (
+            "Expected .format() result to flow to c.execute() call"
+        )
+
+    def test_percent_tuple_both_args_flow(self, cpg):
+        """% with a tuple RHS should wire both tuple elements."""
+        # Find the % call in percent_tuple function
+        pct_calls = [n for n in cpg.nodes(kind=NodeKind.CALL) if n.name == "%"]
+        # Filter to the one with two arguments (from percent_tuple function)
+        pairs = _edge_pairs(cpg, EdgeKind.DATA_FLOWS_TO)
+        # Both username and password should flow to some % call
+        user_to_pct = [(s, t) for s, t in pairs if s == "username" and t == "%"]
+        pass_to_pct = [(s, t) for s, t in pairs if s == "password" and t == "%"]
+        assert user_to_pct, "Expected 'username' to flow to % call in tuple case"
+        assert pass_to_pct, "Expected 'password' to flow to % call in tuple case"
+
+
+class TestParameterDataFlow:
+    """Parameters should be resolvable as identifiers in expressions."""
+
+    def test_param_flows_to_call_arg(self):
+        """Parameter used as a call argument should create DATA_FLOWS_TO."""
+        source = b"""
+def process(data):
+    return clean(data)
+"""
+        cpg = CPGBuilder().add_source(source, "param_flow.py").build()
+        pairs = _edge_pairs(cpg, EdgeKind.DATA_FLOWS_TO)
+        assert ("data", "clean") in pairs, (
+            f"Expected parameter 'data' to flow to clean() call, "
+            f"got DATA_FLOWS_TO pairs: {pairs}"
+        )
+
+    def test_param_flows_through_assignment(self):
+        """Parameter assigned to a variable should create data flow chain."""
+        source = b"""
+def process(data):
+    x = data
+    return x
+"""
+        cpg = CPGBuilder().add_source(source, "param_assign.py").build()
+        pairs = _edge_pairs(cpg, EdgeKind.DATA_FLOWS_TO)
+        assert ("data", "x") in pairs, (
+            f"Expected parameter 'data' to flow to variable 'x', "
+            f"got DATA_FLOWS_TO pairs: {pairs}"
+        )
+
+    def test_param_flows_to_return(self):
+        """Parameter used directly in return should flow to RETURN node."""
+        source = b"""
+def identity(x):
+    return x
+"""
+        cpg = CPGBuilder().add_source(source, "param_ret.py").build()
+        pairs = _edge_pairs(cpg, EdgeKind.DATA_FLOWS_TO)
+        assert ("x", "return") in pairs, (
+            f"Expected parameter 'x' to flow to return, "
+            f"got DATA_FLOWS_TO pairs: {pairs}"
+        )
