@@ -209,11 +209,21 @@ def run_taint(cpg: CodePropertyGraph, policy: TaintPolicy) -> TaintResult:
     # Track which node each label reached through (for path reconstruction)
     # parent[node_id] = set of predecessor node_ids that propagated taint here
     parent: dict[str, set[str]] = {}
-    # Track sanitizer nodes hit on the way to each node
-    sanitizers_on_path: dict[str, set[str]] = {}
+    # Track sanitizer nodes hit on the way to each (origin, node) pair.
+    # Key: (origin_node_id_str, current_node_id_str)
+    # Value: frozenset of sanitizer node ID strings seen on this origin's path.
+    #
+    # When two propagation paths from the same origin converge at a node, we
+    # take the INTERSECTION of their sanitizer sets.  An empty intersection
+    # means at least one path from that origin bypassed all sanitizers, so the
+    # taint is considered unsanitized at that node.
+    sanitizers_on_path: dict[tuple[str, str], frozenset[str]] = {}
 
-    # (node_id_str, labels)
-    worklist: deque[tuple[str, frozenset[TaintLabel]]] = deque()
+    # (node_id_str, labels, sanitizers_carried)
+    # The third element is the frozenset of sanitizer IDs seen so far on the
+    # path that produced this worklist entry.  Each label in `labels` shares
+    # the same origin, so we track one sanitizer set per worklist entry.
+    worklist: deque[tuple[str, frozenset[TaintLabel], frozenset[str]]] = deque()
 
     source_nodes: dict[str, CpgNode] = {}  # origin label name -> source CpgNode
 
@@ -222,24 +232,23 @@ def run_taint(cpg: CodePropertyGraph, policy: TaintPolicy) -> TaintResult:
         if label is not None:
             nid = str(node.id)
             labels_at[nid] = frozenset({label})
-            worklist.append((nid, frozenset({label})))
+            worklist.append((nid, frozenset({label}), frozenset()))
             source_nodes[nid] = node
             parent[nid] = set()
-            sanitizers_on_path[nid] = set()
+            sanitizers_on_path[(nid, nid)] = frozenset()
 
     # -- Propagate ------------------------------------------------------------
     sink_hits: list[tuple[str, frozenset[TaintLabel]]] = []
 
     while worklist:
-        current_id, current_labels = worklist.popleft()
+        current_id, current_labels, current_sanitizers = worklist.popleft()
         current_node = cpg.node(NodeId(current_id))
         if current_node is None:
             continue
 
         is_sanitizer = policy.sanitizers(current_node)
-        san_set = set(sanitizers_on_path.get(current_id, set()))
         if is_sanitizer:
-            san_set.add(current_id)
+            current_sanitizers = current_sanitizers | frozenset({current_id})
 
         targets = list(dfg_fwd.get(current_id, []))
 
@@ -268,21 +277,40 @@ def run_taint(cpg: CodePropertyGraph, policy: TaintPolicy) -> TaintResult:
             new_labels = current_labels | target_labels
 
             if new_labels == target_labels:
-                # Fixed point -- no new information
-                continue
+                # Fixed point for labels -- but we may still need to update
+                # sanitizer tracking if this path has a weaker sanitizer set.
+                # Check per-origin sanitizer sets below; skip if nothing new.
+                needs_update = False
+                for label in current_labels:
+                    origin_key = (str(label.origin), target_id)
+                    existing = sanitizers_on_path.get(origin_key)
+                    propagated = current_sanitizers
+                    if existing is None or len(propagated) < len(existing):
+                        needs_update = True
+                        break
+                if not needs_update:
+                    continue
 
             labels_at[target_id] = new_labels
             parent.setdefault(target_id, set()).add(current_id)
-            sanitizers_on_path[target_id] = san_set
+
+            # Update per-origin sanitizer tracking at the target node.
+            # Use intersection semantics: if two paths from the same origin
+            # converge here, the sanitizer set is the intersection.  This
+            # ensures that any bypass path (empty sanitizers) dominates.
+            for label in current_labels:
+                origin_key = (str(label.origin), target_id)
+                existing = sanitizers_on_path.get(origin_key)
+                if existing is None:
+                    sanitizers_on_path[origin_key] = current_sanitizers
+                else:
+                    sanitizers_on_path[origin_key] = existing & current_sanitizers
 
             target_node = cpg.node(NodeId(target_id))
-            if target_node is not None and policy.sanitizers(target_node):
-                sanitizers_on_path[target_id] = san_set | {target_id}
-
             if target_node is not None and policy.sinks(target_node):
                 sink_hits.append((target_id, new_labels))
 
-            worklist.append((target_id, new_labels))
+            worklist.append((target_id, new_labels, current_sanitizers))
 
     # -- Build paths ----------------------------------------------------------
     paths: list[TaintPath] = []
@@ -306,10 +334,11 @@ def run_taint(cpg: CodePropertyGraph, policy: TaintPolicy) -> TaintResult:
 
             intermediates = _reconstruct_path(origin_str, sink_id_str, parent, cpg)
 
-            san_nodes_on_path = sanitizers_on_path.get(sink_id_str, set())
+            origin_key = (origin_str, sink_id_str)
+            san_node_ids = sanitizers_on_path.get(origin_key, frozenset())
             sanitizer_cpg_nodes = [
                 cpg.node(NodeId(s))
-                for s in san_nodes_on_path
+                for s in san_node_ids
                 if cpg.node(NodeId(s)) is not None
             ]
 

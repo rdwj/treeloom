@@ -311,6 +311,59 @@ class TestTaintResultQueries:
 
 
 # ---------------------------------------------------------------------------
+# Convergent paths with mixed sanitization
+# ---------------------------------------------------------------------------
+
+class TestConvergentSanitization:
+    def test_convergent_paths_mixed_sanitization(self):
+        """One sanitized path and one bypass path to the same sink must yield
+        an unsanitized result — the bypass path dominates."""
+        cpg = CodePropertyGraph()
+        # source -> sanitizer -> sink  (sanitized route)
+        # source -> direct   -> sink   (bypass route)
+        cpg.add_node(make_node(NodeKind.VARIABLE, "src", "s1", line=1))
+        cpg.add_node(make_node(NodeKind.CALL, "sanitize", "san", line=2))
+        cpg.add_node(make_node(NodeKind.VARIABLE, "direct", "d1", line=3))
+        cpg.add_node(make_node(NodeKind.CALL, "sink", "k1", line=4))
+
+        add_edge(cpg, "s1", "san", EdgeKind.DATA_FLOWS_TO)
+        add_edge(cpg, "san", "k1", EdgeKind.DATA_FLOWS_TO)
+        add_edge(cpg, "s1", "d1", EdgeKind.DATA_FLOWS_TO)
+        add_edge(cpg, "d1", "k1", EdgeKind.DATA_FLOWS_TO)
+
+        result = run_taint(cpg, _source_policy({"s1"}, {"k1"}, {"san"}))
+
+        assert len(result.paths) == 1
+        path = result.paths[0]
+        # The bypass path means the sink is reachable unsanitized
+        assert not path.is_sanitized, (
+            "Expected unsanitized because one path bypasses the sanitizer, "
+            f"but got sanitizers={[str(s.id) for s in path.sanitizers]}"
+        )
+
+    def test_convergent_paths_all_sanitized(self):
+        """When every path to the sink passes through a sanitizer, the result
+        should be marked as sanitized."""
+        cpg = CodePropertyGraph()
+        cpg.add_node(make_node(NodeKind.VARIABLE, "src", "s1", line=1))
+        cpg.add_node(make_node(NodeKind.CALL, "san_a", "san1", line=2))
+        cpg.add_node(make_node(NodeKind.CALL, "san_b", "san2", line=3))
+        cpg.add_node(make_node(NodeKind.CALL, "sink", "k1", line=4))
+
+        add_edge(cpg, "s1", "san1", EdgeKind.DATA_FLOWS_TO)
+        add_edge(cpg, "san1", "k1", EdgeKind.DATA_FLOWS_TO)
+        add_edge(cpg, "s1", "san2", EdgeKind.DATA_FLOWS_TO)
+        add_edge(cpg, "san2", "k1", EdgeKind.DATA_FLOWS_TO)
+
+        result = run_taint(cpg, _source_policy({"s1"}, {"k1"}, {"san1", "san2"}))
+
+        assert len(result.paths) == 1
+        assert result.paths[0].is_sanitized, (
+            "Expected sanitized because all paths pass through a sanitizer"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Integration: cpg.taint(policy) entry point
 # ---------------------------------------------------------------------------
 
