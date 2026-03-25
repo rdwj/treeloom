@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sys
 from pathlib import Path
+from typing import Any
 
 from treeloom.export.json import from_json
 from treeloom.graph.cpg import CodePropertyGraph
@@ -87,3 +88,8 @@ def err(msg: str) -> None:
 def json_dumps(obj: object) -> str:
     """Compact JSON serialization."""
     return json.dumps(obj, indent=2, default=str)
+
+
+def format_error(code: str, message: str, **extra: Any) -> str:
+    """Format an error as JSON for --json-errors output."""
+    return json.dumps({"error": code, "message": message, **extra})
