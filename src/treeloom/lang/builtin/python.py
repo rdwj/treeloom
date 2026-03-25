@@ -155,6 +155,44 @@ class PythonVisitor(TreeSitterVisitor):
         ctx.defined_vars.pop()
         ctx.scope_stack.pop()
 
+    def _visit_decorated_definition(
+        self, node: tree_sitter.Node, ctx: _VisitContext
+    ) -> None:
+        """Handle @decorator-prefixed function or class definitions.
+
+        Collects decorator names and visits any decorator call expressions for
+        DFG purposes, then visits the inner function/class definition with the
+        collected decorator names stored in attrs.
+        """
+        decorator_names: list[str] = []
+
+        for child in node.children:
+            if child.type == "decorator":
+                # The decorator body is either a plain identifier or a call.
+                # Collect the name text for attrs and visit any call for DFG.
+                for dec_child in child.children:
+                    if dec_child.type == "call":
+                        decorator_names.append(
+                            self._extract_call_name(dec_child) or ""
+                        )
+                        # Visit the call so that e.g. @app.route('/path') is
+                        # recorded in the graph.
+                        self._visit_call_expression(dec_child, ctx)
+                    elif dec_child.type in ("identifier", "attribute"):
+                        decorator_names.append(
+                            self._node_text(dec_child, ctx.source)
+                        )
+            elif child.type in (
+                "function_definition",
+                "async_function_definition",
+                "class_definition",
+            ):
+                # Stash decorator names so _visit_function_definition can pick
+                # them up when emitting the function node attrs.
+                ctx.pending_decorators = decorator_names
+                self._visit_node(child, ctx)
+                ctx.pending_decorators = []
+
     def _visit_function_definition(
         self, node: tree_sitter.Node, ctx: _VisitContext
     ) -> None:
@@ -175,8 +213,11 @@ class PythonVisitor(TreeSitterVisitor):
         # Emit the function node without params -- we emit parameters manually
         # below so we can register their NodeIds in defined_vars for later
         # identifier lookups (e.g. when a parameter is used in a .format() call).
+        decorators = ctx.pending_decorators or None
+        ctx.pending_decorators = []
         func_id = ctx.emitter.emit_function(
-            func_name, loc, scope, params=None, is_async=is_async
+            func_name, loc, scope, params=None, is_async=is_async,
+            decorators=decorators,
         )
 
         # Now visit the body within the function scope
@@ -475,8 +516,42 @@ class PythonVisitor(TreeSitterVisitor):
             return defined_id
 
         if node.type == "attribute":
-            # e.g., self.x or os.path -- return None for now, handled in calls
-            return None
+            # e.g., obj.attr used as a standalone expression (not as the
+            # function part of a call -- that path goes through
+            # _visit_call_expression).  Emit a VARIABLE node representing
+            # the attribute access so data flow can propagate through it.
+            attr_text = self._node_text(node, ctx.source)
+            loc = self._location(node, ctx.file_path)
+            attr_id = ctx.emitter.emit_variable(attr_text, loc, ctx.current_scope)
+            # Wire data from the receiver object, if it is a known variable.
+            obj_node = node.child_by_field_name("object")
+            if obj_node is not None and obj_node.type == "identifier":
+                obj_name = self._node_text(obj_node, ctx.source)
+                obj_def_id = ctx.defined_vars.get(obj_name)
+                if obj_def_id is not None:
+                    ctx.emitter.emit_data_flow(obj_def_id, attr_id)
+            return attr_id
+
+        if node.type == "subscript":
+            # e.g., config['database'] or session['username'].
+            # Emit a VARIABLE node representing the subscript result so that
+            # taint can propagate: object -> subscript_var -> downstream uses.
+            sub_text = self._node_text(node, ctx.source)
+            loc = self._location(node, ctx.file_path)
+            sub_id = ctx.emitter.emit_variable(sub_text, loc, ctx.current_scope)
+            # Wire data from the object being subscripted, if it is a
+            # resolvable identifier.
+            val_node = node.child_by_field_name("value")
+            if val_node is not None and val_node.type == "identifier":
+                val_name = self._node_text(val_node, ctx.source)
+                val_def_id = ctx.defined_vars.get(val_name)
+                if val_def_id is not None:
+                    ctx.emitter.emit_data_flow(val_def_id, sub_id)
+            # Also visit the subscript key so any nested calls/refs are picked up.
+            key_node = node.child_by_field_name("subscript")
+            if key_node is not None:
+                self._visit_expression(key_node, ctx)
+            return sub_id
 
         if node.type == "binary_operator":
             left = node.child_by_field_name("left")
@@ -531,6 +606,52 @@ class PythonVisitor(TreeSitterVisitor):
             for child in node.children:
                 if child.is_named:
                     return self._visit_expression(child, ctx)
+            return None
+
+        if node.type == "keyword_argument":
+            # e.g., func(name=value) — propagate taint from the value expression
+            # to the call.  The keyword name itself is not a data source.
+            val_node = node.child_by_field_name("value")
+            if val_node is not None:
+                return self._visit_expression(val_node, ctx)
+            return None
+
+        if node.type == "dictionary_splat":
+            # e.g., func(**kwargs) — taint on kwargs propagates into the call.
+            for child in node.children:
+                if child.is_named and child.type == "identifier":
+                    var_name = self._node_text(child, ctx.source)
+                    return ctx.defined_vars.get(var_name)
+            return None
+
+        if node.type in (
+            "list_comprehension",
+            "set_comprehension",
+            "generator_expression",
+        ):
+            # Visit the iterable expression and the element expression so calls
+            # and variable references inside comprehensions are picked up.
+            for child in node.children:
+                if child.type == "for_in_clause":
+                    iterable = child.child_by_field_name("right")
+                    if iterable is not None:
+                        self._visit_expression(iterable, ctx)
+                elif child.is_named and child.type not in (
+                    "for_in_clause",
+                    "if_clause",
+                ):
+                    self._visit_expression(child, ctx)
+            return None
+
+        if node.type == "dictionary_comprehension":
+            for child in node.children:
+                if child.type == "for_in_clause":
+                    iterable = child.child_by_field_name("right")
+                    if iterable is not None:
+                        self._visit_expression(iterable, ctx)
+                elif child.is_named:
+                    if child.type in ("key", "value"):
+                        self._visit_expression(child, ctx)
             return None
 
         # For other expression types, recurse into named children
@@ -666,7 +787,14 @@ class PythonVisitor(TreeSitterVisitor):
 class _VisitContext:
     """Mutable state carried through the tree walk."""
 
-    __slots__ = ("emitter", "file_path", "source", "scope_stack", "defined_vars")
+    __slots__ = (
+        "emitter",
+        "file_path",
+        "source",
+        "scope_stack",
+        "defined_vars",
+        "pending_decorators",
+    )
 
     def __init__(
         self,
@@ -679,6 +807,7 @@ class _VisitContext:
         self.source = source
         self.scope_stack: list[NodeId] = []
         self.defined_vars: ScopeStack = ScopeStack()
+        self.pending_decorators: list[str] = []
 
     @property
     def current_scope(self) -> NodeId:
@@ -689,6 +818,7 @@ class _VisitContext:
 
 _NODE_HANDLERS: dict[str, Any] = {
     "class_definition": PythonVisitor._visit_class_definition,
+    "decorated_definition": PythonVisitor._visit_decorated_definition,
     "function_definition": PythonVisitor._visit_function_definition,
     "async_function_definition": PythonVisitor._visit_function_definition,
     "expression_statement": PythonVisitor._visit_expression_statement,

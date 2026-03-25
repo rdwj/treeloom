@@ -129,14 +129,18 @@ class CPGBuilder:
         scope: NodeId,
         params: list[str] | None = None,
         is_async: bool = False,
+        decorators: list[str] | None = None,
     ) -> NodeId:
         """Emit a FUNCTION node contained in the given scope."""
+        attrs: dict[str, Any] = {"is_async": is_async}
+        if decorators:
+            attrs["decorators"] = decorators
         node_id = self._emit_node(
             NodeKind.FUNCTION,
             name,
             location,
             scope=scope,
-            attrs={"is_async": is_async},
+            attrs=attrs,
         )
         self._emit_contains(scope, node_id)
 

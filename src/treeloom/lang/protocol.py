@@ -32,6 +32,7 @@ class NodeEmitter(Protocol):
         scope: NodeId,
         params: list[str] | None = None,
         is_async: bool = False,
+        decorators: list[str] | None = None,
     ) -> NodeId: ...
 
     def emit_parameter(

@@ -674,3 +674,228 @@ def process(data):
         assert (enc_name, dec_name) in pairs, (
             f"Expected {enc_name!r} -> {dec_name!r}, got pairs: {pairs}"
         )
+
+
+class TestMethodReturnFlow:
+    """Method call return values and attribute/subscript access should propagate
+    DATA_FLOWS_TO through variable assignments."""
+
+    @pytest.fixture()
+    def cpg(self):
+        return _build("method_return_flow.py")
+
+    def test_method_call_result_flows_to_variable(self, cpg):
+        """request.form.get() result should flow to the 'username' variable."""
+        pairs = _edge_pairs(cpg, EdgeKind.DATA_FLOWS_TO)
+        method_to_var = [
+            (s, t) for s, t in pairs if "get" in s and t == "username"
+        ]
+        assert method_to_var, (
+            f"Expected method call result to flow to 'username', got pairs: {pairs}"
+        )
+
+    def test_variable_flows_to_next_call(self, cpg):
+        """Variable 'username' should flow as argument to login()."""
+        pairs = _edge_pairs(cpg, EdgeKind.DATA_FLOWS_TO)
+        assert ("username", "login") in pairs, (
+            f"Expected 'username' -> 'login', got pairs: {pairs}"
+        )
+
+    def test_full_chain_call_result_to_variable_to_call(self, cpg):
+        """Full chain: login() result -> result variable -> execute() call."""
+        pairs = _edge_pairs(cpg, EdgeKind.DATA_FLOWS_TO)
+        assert ("login", "result") in pairs, (
+            f"Expected 'login' -> 'result', got pairs: {pairs}"
+        )
+        assert ("result", "execute") in pairs, (
+            f"Expected 'result' -> 'execute', got pairs: {pairs}"
+        )
+
+    def test_subscript_result_flows_to_variable(self, cpg):
+        """config['database'] subscript result should flow to the 'data' variable."""
+        pairs = _edge_pairs(cpg, EdgeKind.DATA_FLOWS_TO)
+        # The subscript node name includes the full text, e.g. "config['database']"
+        sub_to_var = [(s, t) for s, t in pairs if "config" in s and t == "data"]
+        assert sub_to_var, (
+            f"Expected subscript result to flow to 'data', got pairs: {pairs}"
+        )
+
+    def test_subscript_variable_flows_to_call(self, cpg):
+        """Variable 'data' (from subscript) should flow to connect()."""
+        pairs = _edge_pairs(cpg, EdgeKind.DATA_FLOWS_TO)
+        assert ("data", "connect") in pairs, (
+            f"Expected 'data' -> 'connect', got pairs: {pairs}"
+        )
+
+    def test_attribute_access_flows_to_variable(self, cpg):
+        """obj.attr should flow to the 'value' variable."""
+        pairs = _edge_pairs(cpg, EdgeKind.DATA_FLOWS_TO)
+        attr_to_var = [(s, t) for s, t in pairs if "obj.attr" in s and t == "value"]
+        assert attr_to_var, (
+            f"Expected attribute access to flow to 'value', got pairs: {pairs}"
+        )
+
+    def test_chained_method_chain_preserved(self, cpg):
+        """obj.method().strip() should chain: obj.method -> obj.method.strip -> value."""
+        pairs = _edge_pairs(cpg, EdgeKind.DATA_FLOWS_TO)
+        method_calls = [
+            n for n in cpg.nodes(kind=NodeKind.CALL) if "method" in n.name
+        ]
+        strip_calls = [
+            n for n in cpg.nodes(kind=NodeKind.CALL) if "strip" in n.name
+        ]
+        assert method_calls, "Expected obj.method() call node"
+        assert strip_calls, "Expected .strip() call node"
+
+        method_name = method_calls[0].name
+        strip_name = strip_calls[0].name
+        assert (method_name, strip_name) in pairs, (
+            f"Expected {method_name!r} -> {strip_name!r} in chained call, got pairs: {pairs}"
+        )
+        # strip result flows to value
+        strip_to_var = [(s, t) for s, t in pairs if s == strip_name and t == "value"]
+        assert strip_to_var, (
+            f"Expected {strip_name!r} -> 'value', got pairs: {pairs}"
+        )
+
+
+class TestDecoratedDefinition:
+    """Decorated function definitions should capture decorator names and still
+    emit the wrapped function node correctly."""
+
+    def test_decorator_names_in_attrs(self):
+        """Decorator names should appear in the function's attrs['decorators']."""
+        source = b"""
+@app.route('/api/users/<username>', methods=['GET'])
+def get_user(username):
+    return username
+"""
+        cpg = CPGBuilder().add_source(source, "decorated.py").build()
+        fns = list(cpg.nodes(kind=NodeKind.FUNCTION))
+        assert len(fns) == 1, f"Expected 1 function, got {[f.name for f in fns]}"
+        fn = fns[0]
+        assert fn.name == "get_user"
+        decorators = fn.attrs.get("decorators", [])
+        assert any("route" in d for d in decorators), (
+            f"Expected app.route decorator in attrs, got {decorators}"
+        )
+
+    def test_decorated_function_has_parameters(self):
+        """Parameters of a decorated function should still be emitted."""
+        source = b"""
+@requires_auth
+def update_user(username, data):
+    pass
+"""
+        cpg = CPGBuilder().add_source(source, "decorated_params.py").build()
+        param_names = _node_names(cpg, NodeKind.PARAMETER)
+        assert "username" in param_names, f"Expected 'username' param, got {param_names}"
+        assert "data" in param_names, f"Expected 'data' param, got {param_names}"
+
+    def test_decorator_call_emitted_as_call_node(self):
+        """The @app.route(...) decorator should be emitted as a CALL node."""
+        source = b"""
+@app.route('/api/books')
+def get_books():
+    pass
+"""
+        cpg = CPGBuilder().add_source(source, "decorated_call.py").build()
+        call_names = _node_names(cpg, NodeKind.CALL)
+        assert any("route" in c for c in call_names), (
+            f"Expected app.route call node from decorator, got {call_names}"
+        )
+
+    def test_function_body_still_visited(self):
+        """Calls inside a decorated function body should still be emitted."""
+        source = b"""
+@app.route('/api/items')
+def get_items():
+    return jsonify({'items': []})
+"""
+        cpg = CPGBuilder().add_source(source, "decorated_body.py").build()
+        call_names = _node_names(cpg, NodeKind.CALL)
+        assert "jsonify" in call_names, (
+            f"Expected jsonify call inside decorated function body, got {call_names}"
+        )
+
+    def test_multiple_decorators(self):
+        """Multiple stacked decorators should all be captured."""
+        source = b"""
+@app.route('/api/admin')
+@requires_auth
+@admin_only
+def admin_view():
+    pass
+"""
+        cpg = CPGBuilder().add_source(source, "multi_decorator.py").build()
+        fns = list(cpg.nodes(kind=NodeKind.FUNCTION))
+        assert len(fns) == 1
+        decorators = fns[0].attrs.get("decorators", [])
+        assert len(decorators) == 3, f"Expected 3 decorators, got {decorators}"
+
+
+class TestKeywordAndSplatArgs:
+    """Keyword arguments and **kwargs splats should propagate taint to the call."""
+
+    def test_keyword_arg_flows_to_call(self):
+        """Data passed as a keyword argument should flow to the call site."""
+        source = b"""
+def register(request_data):
+    user = User(username=request_data['username'], password=request_data['password'])
+"""
+        cpg = CPGBuilder().add_source(source, "kwarg_flow.py").build()
+        pairs = _edge_pairs(cpg, EdgeKind.DATA_FLOWS_TO)
+        # request_data['username'] -> User call
+        subscript_to_user = [
+            (s, t) for s, t in pairs
+            if "request_data" in s and t == "User"
+        ]
+        assert subscript_to_user, (
+            f"Expected request_data subscript to flow to User() call via kwarg, "
+            f"got DATA_FLOWS_TO pairs: {pairs}"
+        )
+
+    def test_dict_splat_flows_to_call(self):
+        """**kwargs splat should flow the source dict into the call."""
+        source = b"""
+def create(request_data):
+    user = User(**request_data)
+"""
+        cpg = CPGBuilder().add_source(source, "splat_flow.py").build()
+        pairs = _edge_pairs(cpg, EdgeKind.DATA_FLOWS_TO)
+        splat_to_call = [
+            (s, t) for s, t in pairs
+            if s == "request_data" and t == "User"
+        ]
+        assert splat_to_call, (
+            f"Expected 'request_data' to flow to User() via ** splat, "
+            f"got DATA_FLOWS_TO pairs: {pairs}"
+        )
+
+
+class TestComprehensionVisitation:
+    """Calls inside comprehensions should be visited so the graph is complete."""
+
+    def test_call_in_list_comprehension_iterable(self):
+        """A call in the iterable of a list comprehension should be emitted."""
+        source = b"""
+def get_names():
+    return [u.username for u in User.query.all()]
+"""
+        cpg = CPGBuilder().add_source(source, "comprehension.py").build()
+        call_names = _node_names(cpg, NodeKind.CALL)
+        assert any("all" in c for c in call_names), (
+            f"Expected User.query.all() call inside comprehension, got {call_names}"
+        )
+
+    def test_call_in_generator_expression(self):
+        """A call used inside a generator expression should be emitted."""
+        source = b"""
+def serialize(items):
+    return list(str(x) for x in get_items())
+"""
+        cpg = CPGBuilder().add_source(source, "generator.py").build()
+        call_names = _node_names(cpg, NodeKind.CALL)
+        assert any("get_items" in c for c in call_names), (
+            f"Expected get_items() call inside generator, got {call_names}"
+        )
