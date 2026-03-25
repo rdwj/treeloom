@@ -205,6 +205,21 @@ mypy src/treeloom/
 
 ## Changelog
 
+### Version 0.2.1
+
+- New CLI commands: `annotate`, `diff`, `pattern`, `subgraph`, `watch`, `serve`, `completions`
+- `--json-errors` global flag for machine-readable error output
+- `--progress` flag for build command
+- Multiple `--policy` files for taint policy composition
+- `TaintResult.apply_to(cpg)` stamps taint annotations onto the graph
+- `--apply` flag for taint command writes annotated CPG directly
+- Fixed variable scoping in all visitors (ScopeStack replaces flat dict)
+- Fixed import alias capture in Python, JavaScript, TypeScript visitors
+- Fixed taint sanitizer tracking on convergent paths (per-origin intersection)
+- Shell completions for bash, zsh, fish
+- HTTP JSON API server (`treeloom serve`) with query, node, edges, subgraph endpoints
+- 750 tests
+
 ### Version 0.2.0
 
 - CLI with 7 subcommands: `build`, `info`, `query`, `taint`, `viz`, `dot`, `config`
