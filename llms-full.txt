@@ -208,6 +208,14 @@ class TaintResult:
 
 The taint engine uses worklist-based forward analysis over DATA_FLOWS_TO edges. Sanitizers mark paths as sanitized but do not stop propagation. Inter-procedural flow uses function summaries computed from param-to-return DFG paths.
 
+**Stamping taint onto the graph**: After running taint, call `result.apply_to(cpg)` to annotate every tainted node/edge in the CPG. This makes the graph self-describing — any node inspection, subgraph extraction, or serialization carries taint status:
+```python
+result = cpg.taint(policy)
+result.apply_to(cpg)  # stamps tainted, taint_labels, taint_role, taint_sanitized
+# Now: cpg.get_annotation(node.id, "tainted") -> True/False
+# Subgraphs carry annotations: cpg.query().subgraph(func.id, max_depth=5)
+```
+
 ## Query API
 
 ```python
@@ -270,6 +278,10 @@ dot = to_dot(cpg, edge_kinds=frozenset({EdgeKind.DATA_FLOWS_TO}))
 # Interactive HTML (Cytoscape.js + Dagre layout)
 from treeloom import generate_html, Overlay, OverlayStyle, VisualizationLayer
 html = generate_html(cpg, overlays=[overlay], title="Analysis")
+
+# Exclude noisy node kinds (imports typically dominate the graph)
+html = generate_html(cpg, exclude_kinds=frozenset({NodeKind.IMPORT, NodeKind.LITERAL}))
+# Default layers already put imports in a togglable layer that's OFF by default
 ```
 
 ## Overlay System
@@ -301,7 +313,8 @@ overlay = Overlay(name="Security")
 for path in result.unsanitized_paths():
     overlay.node_styles[path.sink.id] = OverlayStyle(color="#E53935", label="SINK")
     overlay.node_styles[path.source.id] = OverlayStyle(color="#FF9800", label="SOURCE")
-html = generate_html(cpg, overlays=[overlay])
+html = generate_html(cpg, overlays=[overlay],
+                     exclude_kinds=frozenset({NodeKind.IMPORT, NodeKind.LITERAL}))
 ```
 
 ## Supported Languages

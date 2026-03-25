@@ -256,7 +256,7 @@ Exclusion is purely cosmetic — it only affects the HTML output. The underlying
 Overlays let you color nodes in the HTML visualization based on security analysis results, without modifying the CPG itself.
 
 ```python
-from treeloom import Overlay, OverlayStyle, generate_html
+from treeloom import Overlay, OverlayStyle, generate_html, NodeKind
 
 overlay = Overlay(
     name="Security Analysis",
@@ -288,7 +288,13 @@ for path in result.sanitized_paths():
             color="#2196F3", label="SANITIZER", size=35
         )
 
-html = generate_html(cpg, overlays=[overlay], title="Security Analysis Report")
+# Exclude import and literal nodes to reduce visual noise (see note above)
+html = generate_html(
+    cpg,
+    overlays=[overlay],
+    title="Security Analysis Report",
+    exclude_kinds=frozenset({NodeKind.IMPORT, NodeKind.LITERAL}),
+)
 with open("security-report.html", "w") as f:
     f.write(html)
 ```

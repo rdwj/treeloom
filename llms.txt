@@ -41,6 +41,8 @@ Building and analyzing a CPG follows four steps:
 - **NodeId is opaque**: Format is `"{kind}:{file}:{line}:{col}:{counter}"` but consumers must treat it as an opaque string. Never parse or construct NodeIds.
 - **Serialization round-trip**: `from_json(to_json(cpg))` always produces an equivalent graph. `from_dict(to_dict())` is the hard contract.
 - **MultiDiGraph**: Multiple edge kinds can exist between the same node pair (e.g., CONTAINS + DATA_FLOWS_TO). The backend uses NetworkX MultiDiGraph.
+- **Import noise in visualization**: Import nodes often dominate the graph (50%+ of nodes). Use `generate_html(cpg, exclude_kinds=frozenset({NodeKind.IMPORT}))` to omit them entirely, or use the default layers which put imports in a togglable layer that's off by default. CLI: `treeloom viz cpg.json --exclude-kind import`.
+- **Taint annotations on the graph**: After `result = cpg.taint(policy)`, call `result.apply_to(cpg)` to stamp taint status onto graph nodes/edges as annotations. Then subgraph extraction, serialization, and node inspection all carry taint info. CLI: `treeloom taint cpg.json --policy p.yaml --apply -o annotated.json`.
 - **Grammar packages are optional**: Core library works without them. Install `treeloom[languages]` for all grammars, or individual packages like `tree-sitter-python`.
 
 ## Optional
