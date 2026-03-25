@@ -15,6 +15,12 @@ _DEFAULT_LAYERS: list[VisualizationLayer] = [
     VisualizationLayer(
         name="Structure",
         edge_kinds=frozenset({EdgeKind.CONTAINS, EdgeKind.HAS_PARAMETER}),
+        node_kinds=frozenset({
+            NodeKind.MODULE, NodeKind.CLASS, NodeKind.FUNCTION,
+            NodeKind.PARAMETER, NodeKind.VARIABLE, NodeKind.CALL,
+            NodeKind.LITERAL, NodeKind.RETURN, NodeKind.BRANCH,
+            NodeKind.LOOP, NodeKind.BLOCK,
+        }),
         default_visible=True,
     ),
     VisualizationLayer(
@@ -33,6 +39,12 @@ _DEFAULT_LAYERS: list[VisualizationLayer] = [
         name="Call Graph",
         edge_kinds=frozenset({EdgeKind.CALLS, EdgeKind.RESOLVES_TO}),
         default_visible=True,
+    ),
+    VisualizationLayer(
+        name="Imports",
+        node_kinds=frozenset({NodeKind.IMPORT}),
+        edge_kinds=frozenset({EdgeKind.IMPORTS}),
+        default_visible=False,
     ),
 ]
 
@@ -84,16 +96,40 @@ _CY_EDGE_STYLES: dict[EdgeKind, str] = {
 
 def _build_elements(
     cpg: CodePropertyGraph,
+    layers: list[VisualizationLayer],
+    exclude_kinds: frozenset[NodeKind] | None = None,
 ) -> tuple[list[dict[str, Any]], list[dict[str, Any]]]:
-    """Convert the CPG into Cytoscape element dicts."""
+    """Convert the CPG into Cytoscape element dicts.
+
+    Each node/edge is tagged with the layer names it belongs to so the JS
+    sidebar can show and hide elements by layer membership.  Nodes whose kind
+    is in *exclude_kinds* are omitted entirely, along with any edges whose
+    source or target was excluded.
+    """
+    excluded: set[str] = set()
+
     cy_nodes: list[dict[str, Any]] = []
     for node in cpg.nodes():
+        if exclude_kinds and node.kind in exclude_kinds:
+            excluded.add(str(node.id))
+            continue
+
+        # Determine which layers claim this node.
+        node_layers: list[str] = []
+        for layer in layers:
+            if layer.node_kinds is not None and node.kind in layer.node_kinds:
+                node_layers.append(layer.name)
+        # If no layer specifies node_kinds, the node is always present (no
+        # layer-based hiding).
+
         data: dict[str, Any] = {
             "id": str(node.id),
             "label": node.name,
             "kind": node.kind.value,
             "shape": _CY_SHAPES.get(node.kind, "ellipse"),
         }
+        if node_layers:
+            data["layers"] = node_layers
         if node.location is not None:
             data["file"] = str(node.location.file)
             data["line"] = node.location.line
@@ -109,10 +145,15 @@ def _build_elements(
 
     cy_edges: list[dict[str, Any]] = []
     for edge in cpg.edges():
+        src_str = str(edge.source)
+        tgt_str = str(edge.target)
+        if src_str in excluded or tgt_str in excluded:
+            continue
+
         edata: dict[str, Any] = {
             "id": f"{edge.source}--{edge.kind.value}-->{edge.target}",
-            "source": str(edge.source),
-            "target": str(edge.target),
+            "source": src_str,
+            "target": tgt_str,
             "kind": edge.kind.value,
             "color": _CY_EDGE_COLORS.get(edge.kind, "#333"),
             "lineStyle": _CY_EDGE_STYLES.get(edge.kind, "solid"),
@@ -209,16 +250,28 @@ def generate_html(
     layers: list[VisualizationLayer] | None = None,
     overlays: list[Overlay] | None = None,
     title: str = "Code Property Graph",
+    exclude_kinds: frozenset[NodeKind] | None = None,
 ) -> str:
     """Generate a self-contained HTML visualization of the CPG.
 
     The output loads Cytoscape.js and its Dagre layout plugin from CDN
     and requires no additional local files.
+
+    Args:
+        cpg: The Code Property Graph to visualize.
+        layers: Visualization layers for the sidebar toggles.  Defaults to
+            the built-in layer set, which includes an "Imports" layer that is
+            off by default.
+        overlays: Consumer-defined visual overlays (e.g. taint highlighting).
+        title: Page title and sidebar heading.
+        exclude_kinds: Node kinds to omit entirely from the output, along
+            with any edges whose source or target is one of the excluded
+            nodes.  Useful when import nodes dominate the graph.
     """
     effective_layers = layers if layers is not None else list(_DEFAULT_LAYERS)
     effective_overlays = overlays if overlays is not None else []
 
-    cy_nodes, cy_edges = _build_elements(cpg)
+    cy_nodes, cy_edges = _build_elements(cpg, effective_layers, exclude_kinds)
     layer_config = _build_layer_config(effective_layers)
     overlay_config = _build_overlay_config(effective_overlays)
     stats = _compute_stats(cpg)
@@ -385,6 +438,10 @@ _HTML_TEMPLATE = """\
 
   // -- Visibility logic --
   function applyVisibility() {
+    var anyLayerHasEdgeKinds = layerDefs.some(function(l) { return l.edgeKinds; });
+    var anyLayerHasNodeKinds = layerDefs.some(function(l) { return l.nodeKinds; });
+
+    // Edges: visible if at least one active layer claims this edge kind.
     cy.edges().forEach(function(edge) {
       var kind = edge.data('kind');
       var visible = false;
@@ -393,11 +450,24 @@ _HTML_TEMPLATE = """\
           visible = true;
         }
       });
-      // If no layer defines edge kinds, default to visible.
-      var anyLayerHasEdgeKinds = layerDefs.some(function(l) { return l.edgeKinds; });
       if (!anyLayerHasEdgeKinds) visible = true;
       edge.style('display', visible ? 'element' : 'none');
     });
+
+    // Nodes: if any layer specifies nodeKinds, hide nodes whose kind belongs
+    // only to inactive layers.  Nodes not claimed by any layer remain visible.
+    if (anyLayerHasNodeKinds) {
+      cy.nodes().forEach(function(node) {
+        var nodeLayers = node.data('layers');
+        if (!nodeLayers || nodeLayers.length === 0) {
+          // Not claimed by any layer — always show.
+          node.style('display', 'element');
+          return;
+        }
+        var visible = nodeLayers.some(function(ln) { return layerStates[ln]; });
+        node.style('display', visible ? 'element' : 'none');
+      });
+    }
   }
   applyVisibility();
 

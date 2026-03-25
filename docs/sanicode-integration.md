@@ -4,7 +4,11 @@ This guide covers how to replace sanicode's existing `KnowledgeGraph` with treel
 
 ## Status
 
-treeloom v0.1.0 is implemented with all 8 language visitors (Python, JavaScript, TypeScript, Go, Java, C, C++, Rust), the taint analysis engine, pattern matching, and all export formats. It is ready for integration.
+treeloom v0.2.2+ is the recommended minimum version. Key changes by version:
+
+- **v0.1.0** — Initial release: 8 language visitors, taint engine, pattern matching, all export formats.
+- **v0.2.1** — DFG through string formatting was incomplete; taint analysis on format-string-based SQL injection returned zero paths on test targets like vulpy.
+- **v0.2.2** — Fixed DFG propagation through f-strings and `%`/`.format()` string operations. Re-testing on vulpy now finds 12 taint paths that were previously missed. **If you tested against v0.2.1 and saw zero paths, re-test on v0.2.2+.**
 
 ## Adding the Dependency
 
@@ -211,6 +215,41 @@ paths_to_sink = result.paths_to_sink(sink_node.id)
 # What taint labels reached a given node?
 labels = result.labels_at(sink_node.id)
 ```
+
+### A Note on Import Node Noise
+
+In real-world Python codebases, `IMPORT` nodes can account for 50–60% of all CPG nodes. They add visual noise to HTML visualizations and slow down graph rendering without contributing to most security analyses.
+
+treeloom v0.2.2 addresses this in two ways:
+
+**Default layer behaviour** — The HTML visualization now includes an "Imports" layer in the sidebar that is **off by default**. Import nodes belonging only to this layer are hidden on page load. Users can toggle the layer on if they need to inspect import relationships.
+
+**Explicit exclusion** — Pass `exclude_kinds` to `generate_html()` to remove import nodes (and their edges) entirely from the rendered output:
+
+```python
+from treeloom import NodeKind, generate_html
+
+html = generate_html(
+    cpg,
+    overlays=[overlay],
+    title="Security Analysis Report",
+    exclude_kinds=frozenset({NodeKind.IMPORT}),
+)
+```
+
+You can exclude multiple kinds. For dense graphs where literals also add noise:
+
+```python
+exclude_kinds=frozenset({NodeKind.IMPORT, NodeKind.LITERAL})
+```
+
+The same flag is available on the CLI:
+
+```bash
+treeloom viz cpg.json -o report.html --exclude-kind import --exclude-kind literal
+```
+
+Exclusion is purely cosmetic — it only affects the HTML output. The underlying CPG is unchanged, so taint analysis results and annotations are unaffected.
 
 ### Step 6: Create Overlays for Visualization
 

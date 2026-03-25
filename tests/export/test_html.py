@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from treeloom.export.html import generate_html
+from treeloom.export.html import _DEFAULT_LAYERS, generate_html
 from treeloom.graph.cpg import CodePropertyGraph
 from treeloom.model.edges import CpgEdge, EdgeKind
 from treeloom.model.location import SourceLocation
@@ -40,6 +40,18 @@ def cpg() -> CodePropertyGraph:
     g.add_edge(CpgEdge(source=NodeId("mod"), target=NodeId("fn"), kind=EdgeKind.CONTAINS))
     g.add_edge(CpgEdge(source=NodeId("fn"), target=NodeId("var"), kind=EdgeKind.DATA_FLOWS_TO))
     g.annotate_node(NodeId("fn"), "role", "entry_point")
+    return g
+
+
+@pytest.fixture()
+def cpg_with_imports() -> CodePropertyGraph:
+    """CPG containing import nodes and an edge connecting to one."""
+    g = CodePropertyGraph()
+    g.add_node(_make_node("mod", NodeKind.MODULE, "mymod"))
+    g.add_node(_make_node("fn", NodeKind.FUNCTION, "foo", scope="mod"))
+    g.add_node(_make_node("imp", NodeKind.IMPORT, "os"))
+    g.add_edge(CpgEdge(source=NodeId("mod"), target=NodeId("fn"), kind=EdgeKind.CONTAINS))
+    g.add_edge(CpgEdge(source=NodeId("mod"), target=NodeId("imp"), kind=EdgeKind.IMPORTS))
     return g
 
 
@@ -124,3 +136,88 @@ class TestHtmlOutput:
     def test_no_overlays_shows_none(self, cpg: CodePropertyGraph):
         html = generate_html(cpg)
         assert "None" in html  # The sidebar shows "None" when no overlays
+
+
+class TestDefaultLayers:
+    def test_imports_layer_exists(self):
+        names = [layer.name for layer in _DEFAULT_LAYERS]
+        assert "Imports" in names
+
+    def test_imports_layer_off_by_default(self):
+        imports_layer = next(ly for ly in _DEFAULT_LAYERS if ly.name == "Imports")
+        assert imports_layer.default_visible is False
+
+    def test_imports_layer_covers_import_node_kind(self):
+        imports_layer = next(ly for ly in _DEFAULT_LAYERS if ly.name == "Imports")
+        assert imports_layer.node_kinds is not None
+        assert NodeKind.IMPORT in imports_layer.node_kinds
+
+    def test_structure_layer_excludes_import_kind(self):
+        structure_layer = next(ly for ly in _DEFAULT_LAYERS if ly.name == "Structure")
+        if structure_layer.node_kinds is not None:
+            assert NodeKind.IMPORT not in structure_layer.node_kinds
+
+    def test_imports_layer_in_html(self, cpg: CodePropertyGraph):
+        html = generate_html(cpg)
+        assert "Imports" in html
+
+    def test_imports_layer_defaultvisible_false_in_json(self, cpg: CodePropertyGraph):
+        html = generate_html(cpg)
+        # The layer config JSON should show Imports as not default-visible.
+        # A simple check: the string "Imports" should appear alongside false.
+        import json as _json
+        # Find the layerDefs assignment in the script.
+        start = html.index("var layerDefs =") + len("var layerDefs =")
+        end = html.index(";", start)
+        layer_data = _json.loads(html[start:end].strip())
+        imports_entry = next(ly for ly in layer_data if ly["name"] == "Imports")
+        assert imports_entry["defaultVisible"] is False
+
+
+class TestExcludeKinds:
+    def test_excluded_nodes_absent_from_html(
+        self, cpg_with_imports: CodePropertyGraph
+    ):
+        html = generate_html(
+            cpg_with_imports,
+            exclude_kinds=frozenset({NodeKind.IMPORT}),
+        )
+        # The import node name "os" could appear in node data — check that
+        # the node id "imp" (used in the fixture) is not present as a node element.
+        assert '"imp"' not in html
+
+    def test_edges_to_excluded_nodes_removed(
+        self, cpg_with_imports: CodePropertyGraph
+    ):
+        html = generate_html(
+            cpg_with_imports,
+            exclude_kinds=frozenset({NodeKind.IMPORT}),
+        )
+        # The IMPORTS edge from mod -> imp should be gone.
+        assert '"imp"' not in html
+
+    def test_non_excluded_nodes_still_present(
+        self, cpg_with_imports: CodePropertyGraph
+    ):
+        html = generate_html(
+            cpg_with_imports,
+            exclude_kinds=frozenset({NodeKind.IMPORT}),
+        )
+        assert '"mymod"' in html
+        assert '"foo"' in html
+
+    def test_no_exclude_kinds_keeps_imports(
+        self, cpg_with_imports: CodePropertyGraph
+    ):
+        html = generate_html(cpg_with_imports)
+        assert '"imp"' in html
+
+    def test_exclude_multiple_kinds(self, cpg: CodePropertyGraph):
+        # Exclude both variables and functions — only the module should remain.
+        html = generate_html(
+            cpg,
+            exclude_kinds=frozenset({NodeKind.VARIABLE, NodeKind.FUNCTION}),
+        )
+        assert '"mymod"' in html
+        assert '"foo"' not in html
+        assert '"x"' not in html

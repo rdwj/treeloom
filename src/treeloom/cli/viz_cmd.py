@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import sys
 import webbrowser
 from argparse import ArgumentParser, Namespace
 from pathlib import Path
@@ -9,6 +10,9 @@ from typing import Any
 
 from treeloom.export.html import generate_html
 from treeloom.export.json import from_json
+from treeloom.model.nodes import NodeKind
+
+_LARGE_GRAPH_THRESHOLD = 500
 
 
 def register(subparsers: Any) -> None:
@@ -30,6 +34,14 @@ def register(subparsers: Any) -> None:
         "--open", dest="open_browser", action="store_true", default=False,
         help="Open the HTML file in the default browser",
     )
+    parser.add_argument(
+        "--exclude-kind", dest="exclude_kinds", metavar="KIND", action="append",
+        default=[],
+        help=(
+            "Exclude nodes of this kind from the visualization (repeatable). "
+            "Valid kinds: " + ", ".join(k.value for k in NodeKind)
+        ),
+    )
     parser.set_defaults(func=run_cmd)
 
 
@@ -42,8 +54,32 @@ def run_cmd(args: Namespace, _cfg: object = None) -> int:
 
     cpg = from_json(cpg_path.read_text())
 
+    # Warn early for graphs that may render slowly.
+    if cpg.node_count > _LARGE_GRAPH_THRESHOLD:
+        print(
+            f"Warning: CPG has {cpg.node_count:,} nodes. Large graphs may render slowly.\n"
+            "Consider using `treeloom subgraph` to extract a focused view first.",
+            file=sys.stderr,
+        )
+
+    # Parse --exclude-kind flags.
+    exclude_kinds: frozenset[NodeKind] | None = None
+    if args.exclude_kinds:
+        kinds: set[NodeKind] = set()
+        for raw in args.exclude_kinds:
+            try:
+                kinds.add(NodeKind(raw.lower()))
+            except ValueError:
+                valid = ", ".join(k.value for k in NodeKind)
+                print(
+                    f"Error: unknown node kind '{raw}'. Valid kinds: {valid}",
+                    file=sys.stderr,
+                )
+                return 1
+        exclude_kinds = frozenset(kinds)
+
     output_path: Path = args.output or cpg_path.with_suffix(".html")
-    html = generate_html(cpg, title=args.title)
+    html = generate_html(cpg, title=args.title, exclude_kinds=exclude_kinds)
     output_path.write_text(html)
 
     print(f"Wrote visualization to {output_path}")
