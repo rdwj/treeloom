@@ -314,6 +314,114 @@ class TestTaintResultQueries:
 # Integration: cpg.taint(policy) entry point
 # ---------------------------------------------------------------------------
 
+# ---------------------------------------------------------------------------
+# apply_to: stamp annotations onto the CPG
+# ---------------------------------------------------------------------------
+
+class TestApplyTo:
+    def _build_three_hop_cpg(self) -> tuple[CodePropertyGraph, TaintResult]:
+        """source -> intermediate -> sink with DATA_FLOWS_TO edges."""
+        cpg = CodePropertyGraph()
+        cpg.add_node(make_node(NodeKind.VARIABLE, "src", "s1", line=1))
+        cpg.add_node(make_node(NodeKind.VARIABLE, "mid", "m1", line=2))
+        cpg.add_node(make_node(NodeKind.CALL, "sink", "k1", line=3))
+        add_edge(cpg, "s1", "m1", EdgeKind.DATA_FLOWS_TO)
+        add_edge(cpg, "m1", "k1", EdgeKind.DATA_FLOWS_TO)
+
+        result = run_taint(cpg, _source_policy({"s1"}, {"k1"}))
+        return cpg, result
+
+    def test_source_annotated(self):
+        cpg, result = self._build_three_hop_cpg()
+        result.apply_to(cpg)
+
+        assert cpg.get_annotation(NodeId("s1"), "tainted") is True
+        assert cpg.get_annotation(NodeId("s1"), "taint_role") == "source"
+
+    def test_sink_annotated(self):
+        cpg, result = self._build_three_hop_cpg()
+        result.apply_to(cpg)
+
+        assert cpg.get_annotation(NodeId("k1"), "tainted") is True
+        assert cpg.get_annotation(NodeId("k1"), "taint_role") == "sink"
+        labels = cpg.get_annotation(NodeId("k1"), "taint_labels")
+        assert isinstance(labels, list)
+        assert len(labels) >= 1
+
+    def test_intermediate_annotated(self):
+        cpg, result = self._build_three_hop_cpg()
+        result.apply_to(cpg)
+
+        assert cpg.get_annotation(NodeId("m1"), "tainted") is True
+        assert cpg.get_annotation(NodeId("m1"), "taint_role") == "intermediate"
+
+    def test_edges_annotated(self):
+        cpg, result = self._build_three_hop_cpg()
+        result.apply_to(cpg)
+
+        # At least one edge along the path should be annotated
+        assert cpg.get_edge_annotation(NodeId("s1"), NodeId("m1"), "tainted") is True
+        assert cpg.get_edge_annotation(NodeId("m1"), NodeId("k1"), "tainted") is True
+
+    def test_sink_unsanitized(self):
+        cpg, result = self._build_three_hop_cpg()
+        result.apply_to(cpg)
+
+        assert cpg.get_annotation(NodeId("k1"), "taint_sanitized") is False
+
+    def test_sanitizer_role(self):
+        cpg = CodePropertyGraph()
+        cpg.add_node(make_node(NodeKind.VARIABLE, "src", "s1", line=1))
+        cpg.add_node(make_node(NodeKind.CALL, "sanitize", "san", line=2))
+        cpg.add_node(make_node(NodeKind.CALL, "sink", "k1", line=3))
+        add_edge(cpg, "s1", "san", EdgeKind.DATA_FLOWS_TO)
+        add_edge(cpg, "san", "k1", EdgeKind.DATA_FLOWS_TO)
+
+        result = run_taint(cpg, _source_policy({"s1"}, {"k1"}, {"san"}))
+        result.apply_to(cpg)
+
+        assert cpg.get_annotation(NodeId("san"), "taint_role") == "sanitizer"
+        assert cpg.get_annotation(NodeId("k1"), "taint_sanitized") is True
+
+    def test_mixed_sanitization_unsanitized_wins(self):
+        """If one path is sanitized and another is not, sink is unsanitized."""
+        cpg = CodePropertyGraph()
+        # Use a single source with two paths: one through sanitizer, one direct
+        cpg.add_node(make_node(NodeKind.VARIABLE, "src", "s1", line=1))
+        cpg.add_node(make_node(NodeKind.CALL, "sanitize", "san", line=2))
+        cpg.add_node(make_node(NodeKind.CALL, "sink_a", "k1", line=3))
+        cpg.add_node(make_node(NodeKind.CALL, "sink_b", "k2", line=4))
+
+        # Sanitized path: s1 -> san -> k1
+        add_edge(cpg, "s1", "san", EdgeKind.DATA_FLOWS_TO)
+        add_edge(cpg, "san", "k1", EdgeKind.DATA_FLOWS_TO)
+        # Unsanitized path: s1 -> k2
+        add_edge(cpg, "s1", "k2", EdgeKind.DATA_FLOWS_TO)
+
+        result = run_taint(cpg, _source_policy({"s1"}, {"k1", "k2"}, {"san"}))
+        result.apply_to(cpg)
+
+        # Sanitized sink should be marked as sanitized
+        assert cpg.get_annotation(NodeId("k1"), "taint_sanitized") is True
+        # Unsanitized sink should be marked as unsanitized
+        assert cpg.get_annotation(NodeId("k2"), "taint_sanitized") is False
+
+    def test_annotations_survive_serialization(self):
+        """Annotations set by apply_to should round-trip through to_dict/from_dict."""
+        cpg, result = self._build_three_hop_cpg()
+        result.apply_to(cpg)
+
+        restored = CodePropertyGraph.from_dict(cpg.to_dict())
+
+        assert restored.get_annotation(NodeId("s1"), "taint_role") == "source"
+        assert restored.get_annotation(NodeId("k1"), "taint_role") == "sink"
+        assert restored.get_annotation(NodeId("m1"), "tainted") is True
+
+
+# ---------------------------------------------------------------------------
+# Integration: cpg.taint(policy) entry point
+# ---------------------------------------------------------------------------
+
 class TestCpgTaintMethod:
     def test_taint_via_cpg_method(self):
         """Verify CodePropertyGraph.taint() delegates to run_taint."""

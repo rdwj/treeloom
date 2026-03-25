@@ -103,6 +103,79 @@ class TaintResult:
         """Return the set of taint labels that reached a given node."""
         return self._labels_at.get(str(node_id), frozenset())
 
+    def apply_to(self, cpg: CodePropertyGraph) -> None:
+        """Stamp taint analysis results onto the graph as annotations.
+
+        After calling this, any node/edge in the CPG carries its taint status
+        as annotations, making the graph self-describing for downstream
+        inspection and subgraph extraction.
+
+        Annotations written per node:
+          - ``tainted`` (bool): True if any taint label reached this node.
+          - ``taint_labels`` (list[str]): Sorted label names at the node.
+          - ``taint_role`` (str): One of ``"source"``, ``"sink"``,
+            ``"sanitizer"``, or ``"intermediate"``.
+          - ``taint_sanitized`` (bool, sinks only): False if *any* path
+            reaching the sink is unsanitized.
+
+        Annotations written per edge (along taint paths):
+          - ``tainted`` (bool): True.
+          - ``taint_labels`` (list[str]): Labels carried along the path.
+        """
+        # -- Per-node taint labels ------------------------------------------------
+        for node_id_str, labels in self._labels_at.items():
+            if labels:
+                node_id = NodeId(node_id_str)
+                cpg.annotate_node(node_id, "tainted", True)
+                cpg.annotate_node(
+                    node_id, "taint_labels", sorted({lb.name for lb in labels})
+                )
+
+        # -- Roles and edge annotations from paths -------------------------------
+        source_ids: set[str] = set()
+        sink_ids: set[str] = set()
+        sanitizer_ids: set[str] = set()
+
+        for path in self.paths:
+            source_ids.add(str(path.source.id))
+            sink_ids.add(str(path.sink.id))
+            for s in path.sanitizers:
+                sanitizer_ids.add(str(s.id))
+
+            # Annotate edges along the path
+            for i in range(len(path.intermediates) - 1):
+                src = path.intermediates[i].id
+                tgt = path.intermediates[i + 1].id
+                cpg.annotate_edge(src, tgt, "tainted", True)
+                cpg.annotate_edge(
+                    src, tgt, "taint_labels",
+                    sorted({lb.name for lb in path.labels}),
+                )
+
+        # Set taint_role
+        for node_id_str in source_ids:
+            cpg.annotate_node(NodeId(node_id_str), "taint_role", "source")
+        for node_id_str in sink_ids:
+            cpg.annotate_node(NodeId(node_id_str), "taint_role", "sink")
+        for node_id_str in sanitizer_ids:
+            cpg.annotate_node(NodeId(node_id_str), "taint_role", "sanitizer")
+
+        # Intermediate: tainted but not source/sink/sanitizer
+        role_ids = source_ids | sink_ids | sanitizer_ids
+        for node_id_str, labels in self._labels_at.items():
+            if labels and node_id_str not in role_ids:
+                cpg.annotate_node(NodeId(node_id_str), "taint_role", "intermediate")
+
+        # Track sanitization status per sink
+        for path in self.paths:
+            sink_id = path.sink.id
+            current = cpg.get_annotation(sink_id, "taint_sanitized")
+            if current is None:
+                cpg.annotate_node(sink_id, "taint_sanitized", path.is_sanitized)
+            elif current and not path.is_sanitized:
+                # Any unsanitized path trumps previously-seen sanitized ones
+                cpg.annotate_node(sink_id, "taint_sanitized", False)
+
 
 # ---------------------------------------------------------------------------
 # Engine

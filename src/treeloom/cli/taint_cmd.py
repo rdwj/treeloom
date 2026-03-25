@@ -18,7 +18,7 @@ from treeloom.analysis.taint import (
     TaintResult,
     run_taint,
 )
-from treeloom.export.json import from_json
+from treeloom.export.json import from_json, to_json
 from treeloom.model.nodes import CpgNode, NodeKind
 
 
@@ -46,6 +46,10 @@ def register(subparsers: Any) -> None:
     parser.add_argument(
         "--json", dest="json_output", action="store_true", default=False,
         help="Output results as JSON",
+    )
+    parser.add_argument(
+        "--apply", action="store_true", default=False,
+        help="Write taint annotations back to the CPG and save to -o (default: tainted-cpg.json)",
     )
     parser.set_defaults(func=run_cmd)
 
@@ -76,6 +80,20 @@ def run_cmd(args: Namespace, _cfg: object = None) -> int:
         return 1
 
     result = run_taint(cpg, policy)
+
+    if getattr(args, "apply", False):
+        result.apply_to(cpg)
+        out_path = args.output or Path("tainted-cpg.json")
+        out_path.write_text(to_json(cpg))
+        annotated_nodes = sum(
+            1 for nid in cpg._annotations if cpg._annotations[nid].get("tainted")
+        )
+        print(
+            f"Taint analysis: {len(result.paths)} paths found, "
+            f"{annotated_nodes} nodes annotated. "
+            f"Written to {out_path}"
+        )
+        return 0
 
     if args.json_output:
         text = _format_json(result, args.show_sanitized)

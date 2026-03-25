@@ -329,6 +329,59 @@ class TestLoadPolicies:
         assert policy.sinks(call_node) is True
 
 
+class TestApplyFlag:
+    def test_apply_writes_annotated_cpg(self, tmp_path: Path) -> None:
+        cpg = _build_taint_cpg()
+        cpg_file = tmp_path / "cpg.json"
+        _write_cpg(cpg, cpg_file)
+
+        policy_file = tmp_path / "policy.yaml"
+        _write_policy(BASIC_POLICY, policy_file)
+
+        out_file = tmp_path / "tainted.json"
+        args = Namespace(
+            cpg_file=cpg_file, policy=[policy_file], output=out_file,
+            show_sanitized=False, json_output=False, apply=True,
+        )
+        rc = run_cmd(args)
+        assert rc == 0
+        assert out_file.exists()
+
+        # Load the annotated CPG and verify taint annotations
+        from treeloom.export.json import from_json as load_json
+        restored = load_json(out_file.read_text())
+
+        # The sink (exec) should be annotated as tainted
+        assert restored.get_annotation(NodeId("c1"), "tainted") is True
+        assert restored.get_annotation(NodeId("c1"), "taint_role") == "sink"
+
+        # The source should be annotated
+        assert restored.get_annotation(NodeId("p1"), "taint_role") == "source"
+
+    def test_apply_default_output(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+        """When --apply is set but no -o given, output defaults to tainted-cpg.json."""
+        monkeypatch.chdir(tmp_path)
+
+        cpg = _build_taint_cpg()
+        cpg_file = tmp_path / "cpg.json"
+        _write_cpg(cpg, cpg_file)
+
+        policy_file = tmp_path / "policy.yaml"
+        _write_policy(BASIC_POLICY, policy_file)
+
+        args = Namespace(
+            cpg_file=cpg_file, policy=[policy_file], output=None,
+            show_sanitized=False, json_output=False, apply=True,
+        )
+        rc = run_cmd(args)
+        assert rc == 0
+
+        default_file = Path("tainted-cpg.json")
+        assert default_file.exists()
+        data = json.loads(default_file.read_text())
+        assert "annotations" in data
+
+
 class TestMultiPolicyRunCmd:
     def test_multi_policy_finds_paths(self, tmp_path: Path) -> None:
         """Taint paths should be found when sources and sinks are in separate policy files."""
