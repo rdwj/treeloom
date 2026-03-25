@@ -251,17 +251,25 @@ class PythonVisitor(TreeSitterVisitor):
         loc = self._location(node, ctx.file_path)
         scope = ctx.current_scope
         names: list[str] = []
+        aliases: dict[str, str] = {}
 
         for child in node.children:
             if child.type == "dotted_name":
                 names.append(self._node_text(child, ctx.source))
             elif child.type == "aliased_import":
-                dotted = child.child_by_field_name("name")
-                if dotted:
-                    names.append(self._node_text(dotted, ctx.source))
+                name_node = child.child_by_field_name("name")
+                alias_node = child.child_by_field_name("alias")
+                if name_node:
+                    orig = self._node_text(name_node, ctx.source)
+                    names.append(orig)
+                    if alias_node:
+                        aliases[orig] = self._node_text(alias_node, ctx.source)
 
         module_name = names[0] if names else ""
-        ctx.emitter.emit_import(module_name, names, loc, scope, is_from=False)
+        ctx.emitter.emit_import(
+            module_name, names, loc, scope, is_from=False,
+            aliases=aliases or None,
+        )
 
     def _visit_import_from_statement(
         self, node: tree_sitter.Node, ctx: _VisitContext
@@ -271,6 +279,7 @@ class PythonVisitor(TreeSitterVisitor):
 
         module_name = ""
         imported_names: list[str] = []
+        aliases: dict[str, str] = {}
         saw_import = False
 
         for child in node.children:
@@ -286,12 +295,17 @@ class PythonVisitor(TreeSitterVisitor):
                 else:
                     imported_names.append(text)
             elif child.type == "aliased_import":
-                dotted = child.child_by_field_name("name")
-                if dotted:
-                    imported_names.append(self._node_text(dotted, ctx.source))
+                name_node = child.child_by_field_name("name")
+                alias_node = child.child_by_field_name("alias")
+                if name_node:
+                    orig = self._node_text(name_node, ctx.source)
+                    imported_names.append(orig)
+                    if alias_node:
+                        aliases[orig] = self._node_text(alias_node, ctx.source)
 
         ctx.emitter.emit_import(
-            module_name, imported_names, loc, scope, is_from=True
+            module_name, imported_names, loc, scope, is_from=True,
+            aliases=aliases or None,
         )
 
     def _visit_if_statement(

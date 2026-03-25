@@ -324,16 +324,21 @@ class JavaScriptVisitor(TreeSitterVisitor):
 
         module_name = ""
         imported_names: list[str] = []
+        aliases: dict[str, str] = {}
 
         for child in node.children:
             if child.type == "string":
                 raw = self._node_text(child, ctx.source)
                 module_name = raw.strip("'\"")
             elif child.type == "import_clause":
-                imported_names.extend(_extract_import_names(child, ctx.source))
+                clause_names, clause_aliases = _extract_import_names(child, ctx.source)
+                imported_names.extend(clause_names)
+                aliases.update(clause_aliases)
 
         ctx.emitter.emit_import(
-            module_name, imported_names, loc, scope, is_from=bool(imported_names)
+            module_name, imported_names, loc, scope,
+            is_from=bool(imported_names),
+            aliases=aliases or None,
         )
 
     def _visit_if_statement(
@@ -641,9 +646,17 @@ def _extract_param_names(
     return names
 
 
-def _extract_import_names(clause_node: tree_sitter.Node, source: bytes) -> list[str]:
-    """Extract imported names from an import_clause node."""
+def _extract_import_names(
+    clause_node: tree_sitter.Node, source: bytes
+) -> tuple[list[str], dict[str, str]]:
+    """Extract imported names and aliases from an import_clause node.
+
+    Returns ``(names, aliases)`` where ``names`` is the list of original
+    imported identifiers and ``aliases`` maps original name to local alias
+    (e.g. ``{"foo": "bar"}`` for ``import { foo as bar } from '...'``).
+    """
     names: list[str] = []
+    aliases: dict[str, str] = {}
     for child in clause_node.children:
         if child.type == "identifier":
             # default import: import Foo from '...'
@@ -651,17 +664,20 @@ def _extract_import_names(clause_node: tree_sitter.Node, source: bytes) -> list[
         elif child.type == "named_imports":
             for spec in child.children:
                 if spec.type == "import_specifier":
-                    # Use local alias if present, otherwise the imported name
-                    alias = spec.child_by_field_name("alias")
-                    name_node = alias if alias is not None else spec.children[0]
-                    if name_node is not None and name_node.is_named:
-                        names.append(name_node.text.decode("utf-8", errors="replace"))
+                    # spec.children[0] is the exported name, alias field is the local name
+                    alias_node = spec.child_by_field_name("alias")
+                    orig_node = spec.children[0] if spec.children else None
+                    if orig_node is not None and orig_node.is_named:
+                        orig = orig_node.text.decode("utf-8", errors="replace")
+                        names.append(orig)
+                        if alias_node is not None:
+                            aliases[orig] = alias_node.text.decode("utf-8", errors="replace")
         elif child.type == "namespace_import":
             # import * as ns from '...'
             for sub in child.children:
                 if sub.type == "identifier":
                     names.append(sub.text.decode("utf-8", errors="replace"))
-    return names
+    return names, aliases
 
 
 def _extract_for_init_var(init_node: tree_sitter.Node, source: bytes) -> str | None:

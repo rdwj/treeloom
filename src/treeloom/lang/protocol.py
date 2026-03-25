@@ -72,6 +72,7 @@ class NodeEmitter(Protocol):
         location: SourceLocation,
         scope: NodeId,
         is_from: bool = False,
+        aliases: dict[str, str] | None = None,
     ) -> NodeId: ...
 
     # Data flow

@@ -225,15 +225,23 @@ class CPGBuilder:
         location: SourceLocation,
         scope: NodeId,
         is_from: bool = False,
+        aliases: dict[str, str] | None = None,
     ) -> NodeId:
-        """Emit an IMPORT node contained in the given scope."""
+        """Emit an IMPORT node contained in the given scope.
+
+        ``aliases`` maps original name to local alias, e.g.
+        ``{"sys": "system"}`` for ``import sys as system``.
+        """
         display = f"from {module}" if is_from else f"import {module}"
+        attrs: dict[str, Any] = {"module": module, "names": names, "is_from": is_from}
+        if aliases:
+            attrs["aliases"] = aliases
         node_id = self._emit_node(
             NodeKind.IMPORT,
             display,
             location,
             scope=scope,
-            attrs={"module": module, "names": names, "is_from": is_from},
+            attrs=attrs,
         )
         self._emit_contains(scope, node_id)
         return node_id

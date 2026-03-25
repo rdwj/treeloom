@@ -160,6 +160,33 @@ class TestImports:
         assert len(matches) == 1, f"Expected one import for {module_name}, got {len(matches)}"
         assert matches[0].attrs["names"] == expected_names
 
+    def test_aliased_import_records_alias(self, cpg):
+        """``import sys as system`` should record aliases={"sys": "system"}."""
+        sys_imports = [
+            n for n in cpg.nodes(kind=NodeKind.IMPORT)
+            if n.attrs.get("module") == "sys" and not n.attrs.get("is_from")
+        ]
+        assert len(sys_imports) == 1
+        assert sys_imports[0].attrs.get("aliases") == {"sys": "system"}
+
+    def test_unaliased_import_has_no_aliases(self, cpg):
+        """``import os`` (no alias) should have no ``aliases`` key in attrs."""
+        os_imports = [
+            n for n in cpg.nodes(kind=NodeKind.IMPORT)
+            if n.attrs.get("module") == "os" and not n.attrs.get("is_from")
+        ]
+        assert len(os_imports) == 1
+        assert "aliases" not in os_imports[0].attrs
+
+    def test_from_import_without_alias_has_no_aliases(self, cpg):
+        """``from collections import OrderedDict, defaultdict`` has no aliases."""
+        collections_imports = [
+            n for n in cpg.nodes(kind=NodeKind.IMPORT)
+            if n.attrs.get("module") == "collections"
+        ]
+        assert len(collections_imports) == 1
+        assert "aliases" not in collections_imports[0].attrs
+
 
 class TestControlFlow:
     @pytest.fixture()
