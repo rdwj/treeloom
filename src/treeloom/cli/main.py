@@ -17,6 +17,7 @@ from treeloom.cli import (
     dot_cmd,
     info,
     query,
+    subgraph_cmd,
     taint_cmd,
     viz_cmd,
 )
@@ -50,6 +51,7 @@ def main(argv: list[str] | None = None) -> int:
     info.register(subparsers)
     query.register(subparsers)
     config.register(subparsers)
+    subgraph_cmd.register(subparsers)
     taint_cmd.register(subparsers)
     viz_cmd.register(subparsers)
     dot_cmd.register(subparsers)

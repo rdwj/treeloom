@@ -30,7 +30,9 @@ def register(subparsers: Any) -> None:
     )
     parser.add_argument("cpg_file", type=Path, help="Path to CPG JSON file")
     parser.add_argument(
-        "--policy", "-p", type=Path, required=True, help="Path to YAML policy file"
+        "--policy", "-p", type=Path, action="append", required=True,
+        metavar="POLICY_FILE",
+        help="Path to YAML policy file (repeatable; rules from all files are merged)",
     )
     parser.add_argument(
         "-o", "--output", type=Path, default=None, help="Write results to file"
@@ -51,14 +53,15 @@ def register(subparsers: Any) -> None:
 def run_cmd(args: Namespace, _cfg: object = None) -> int:
     """Execute the taint subcommand."""
     cpg_path: Path = args.cpg_file
-    policy_path: Path = args.policy
+    policy_paths: list[Path] = args.policy  # list due to action="append"
 
     if not cpg_path.is_file():
         print(f"Error: CPG file not found: {cpg_path}", file=sys.stderr)
         return 1
-    if not policy_path.is_file():
-        print(f"Error: policy file not found: {policy_path}", file=sys.stderr)
-        return 1
+    for policy_path in policy_paths:
+        if not policy_path.is_file():
+            print(f"Error: policy file not found: {policy_path}", file=sys.stderr)
+            return 1
 
     try:
         cpg = from_json(cpg_path.read_text())
@@ -67,7 +70,7 @@ def run_cmd(args: Namespace, _cfg: object = None) -> int:
         return 1
 
     try:
-        policy = load_policy(policy_path, cpg)
+        policy = load_policies(policy_paths, cpg)
     except Exception as exc:
         print(f"Error loading policy: {exc}", file=sys.stderr)
         return 1
@@ -92,16 +95,54 @@ def run_cmd(args: Namespace, _cfg: object = None) -> int:
 # ---------------------------------------------------------------------------
 
 
+def _merge_policy_data(files: list[Path]) -> dict[str, list[Any]]:
+    """Load and merge rules from one or more YAML policy files.
+
+    Each file must be a YAML mapping. The ``sources``, ``sinks``,
+    ``sanitizers``, and ``propagators`` lists from every file are concatenated
+    into a single merged dict.
+    """
+    merged: dict[str, list[Any]] = {
+        "sources": [],
+        "sinks": [],
+        "sanitizers": [],
+        "propagators": [],
+    }
+    for path in files:
+        data = yaml.safe_load(path.read_text())
+        if not isinstance(data, dict):
+            msg = f"Policy file {path} must be a YAML mapping, got {type(data).__name__}"
+            raise ValueError(msg)
+        for key in merged:
+            merged[key].extend(data.get(key, []))
+    return merged
+
+
+def load_policies(paths: list[Path], cpg: object = None) -> TaintPolicy:
+    """Load and merge multiple YAML policy files into a single TaintPolicy.
+
+    Rules from all files are concatenated; a node is a source/sink/sanitizer
+    if it matches any rule from any file.
+    """
+    data = _merge_policy_data(paths)
+    return _compile_policy(data)
+
+
 def load_policy(path: Path, cpg: object = None) -> TaintPolicy:
     """Parse a YAML policy file and compile into a TaintPolicy.
 
     The *cpg* parameter is accepted for API symmetry but not currently used.
+    For multiple files use :func:`load_policies`.
     """
     data = yaml.safe_load(path.read_text())
     if not isinstance(data, dict):
         msg = f"Policy file must be a YAML mapping, got {type(data).__name__}"
         raise ValueError(msg)
+    return _compile_policy(data)
 
+
+def _compile_policy(data: dict[str, Any]) -> TaintPolicy:
+    """Compile a merged policy data dict into a TaintPolicy."""
     source_rules: list[dict[str, Any]] = data.get("sources", [])
     sink_rules: list[dict[str, Any]] = data.get("sinks", [])
     sanitizer_rules: list[dict[str, Any]] = data.get("sanitizers", [])

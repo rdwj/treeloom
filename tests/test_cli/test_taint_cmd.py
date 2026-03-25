@@ -9,7 +9,13 @@ from pathlib import Path
 import pytest
 import yaml
 
-from treeloom.cli.taint_cmd import _matches, load_policy, run_cmd
+from treeloom.cli.taint_cmd import (
+    _matches,
+    _merge_policy_data,
+    load_policies,
+    load_policy,
+    run_cmd,
+)
 from treeloom.export.json import to_json
 from treeloom.graph.cpg import CodePropertyGraph
 from treeloom.model.edges import CpgEdge, EdgeKind
@@ -195,7 +201,7 @@ class TestRunCmd:
 
         out_file = tmp_path / "results.txt"
         args = Namespace(
-            cpg_file=cpg_file, policy=policy_file, output=out_file,
+            cpg_file=cpg_file, policy=[policy_file], output=out_file,
             show_sanitized=False, json_output=False,
         )
         rc = run_cmd(args)
@@ -215,7 +221,7 @@ class TestRunCmd:
 
         out_file = tmp_path / "results.json"
         args = Namespace(
-            cpg_file=cpg_file, policy=policy_file, output=out_file,
+            cpg_file=cpg_file, policy=[policy_file], output=out_file,
             show_sanitized=False, json_output=True,
         )
         rc = run_cmd(args)
@@ -236,7 +242,7 @@ class TestRunCmd:
 
         out_file = tmp_path / "results.txt"
         args = Namespace(
-            cpg_file=cpg_file, policy=policy_file, output=out_file,
+            cpg_file=cpg_file, policy=[policy_file], output=out_file,
             show_sanitized=True, json_output=False,
         )
         rc = run_cmd(args)
@@ -248,7 +254,7 @@ class TestRunCmd:
     def test_missing_cpg_file(self, tmp_path: Path) -> None:
         args = Namespace(
             cpg_file=tmp_path / "missing.json",
-            policy=tmp_path / "policy.yaml",
+            policy=[tmp_path / "policy.yaml"],
             output=None, show_sanitized=False, json_output=False,
         )
         rc = run_cmd(args)
@@ -260,7 +266,112 @@ class TestRunCmd:
 
         args = Namespace(
             cpg_file=cpg_file,
-            policy=tmp_path / "missing.yaml",
+            policy=[tmp_path / "missing.yaml"],
+            output=None, show_sanitized=False, json_output=False,
+        )
+        rc = run_cmd(args)
+        assert rc == 1
+
+
+class TestMergePolicyData:
+    def test_single_file(self, tmp_path: Path) -> None:
+        policy_file = tmp_path / "policy.yaml"
+        _write_policy(BASIC_POLICY, policy_file)
+        merged = _merge_policy_data([policy_file])
+        assert len(merged["sources"]) == 1
+        assert len(merged["sinks"]) == 1
+        assert len(merged["sanitizers"]) == 1
+
+    def test_two_files_combined(self, tmp_path: Path) -> None:
+        sources_file = tmp_path / "sources.yaml"
+        source_rule = {"kind": "PARAMETER", "name": "user_.*", "label": "user_input"}
+        _write_policy({"sources": [source_rule]}, sources_file)
+
+        sinks_file = tmp_path / "sinks.yaml"
+        _write_policy({"sinks": [{"kind": "CALL", "name": "exec|eval"}]}, sinks_file)
+
+        merged = _merge_policy_data([sources_file, sinks_file])
+        assert len(merged["sources"]) == 1
+        assert len(merged["sinks"]) == 1
+
+    def test_invalid_yaml_raises(self, tmp_path: Path) -> None:
+        bad_file = tmp_path / "bad.yaml"
+        bad_file.write_text("just a string")
+        with pytest.raises(ValueError, match="YAML mapping"):
+            _merge_policy_data([bad_file])
+
+
+class TestLoadPolicies:
+    def test_rules_from_both_files_active(self, tmp_path: Path) -> None:
+        """Sources from file A and sinks from file B should both be recognized."""
+        sources_file = tmp_path / "sources.yaml"
+        _write_policy(
+            {"sources": [{"kind": "PARAMETER", "name": "user_.*", "label": "user_input"}]},
+            sources_file,
+        )
+        sinks_file = tmp_path / "sinks.yaml"
+        _write_policy(
+            {"sinks": [{"kind": "CALL", "name": "exec|eval"}]},
+            sinks_file,
+        )
+
+        cpg = _build_taint_cpg()
+        policy = load_policies([sources_file, sinks_file], cpg)
+
+        param = cpg.node(NodeId("p1"))
+        assert param is not None
+        label = policy.sources(param)
+        assert label is not None
+        assert label.name == "user_input"
+
+        call_node = cpg.node(NodeId("c1"))
+        assert call_node is not None
+        assert policy.sinks(call_node) is True
+
+
+class TestMultiPolicyRunCmd:
+    def test_multi_policy_finds_paths(self, tmp_path: Path) -> None:
+        """Taint paths should be found when sources and sinks are in separate policy files."""
+        cpg = _build_taint_cpg()
+        cpg_file = tmp_path / "cpg.json"
+        _write_cpg(cpg, cpg_file)
+
+        sources_file = tmp_path / "sources.yaml"
+        _write_policy(
+            {"sources": [{"kind": "PARAMETER", "name": "user_.*", "label": "user_input"}]},
+            sources_file,
+        )
+        sinks_file = tmp_path / "sinks.yaml"
+        _write_policy(
+            {"sinks": [{"kind": "CALL", "name": "exec|eval"}]},
+            sinks_file,
+        )
+
+        out_file = tmp_path / "results.txt"
+        args = Namespace(
+            cpg_file=cpg_file,
+            policy=[sources_file, sinks_file],
+            output=out_file,
+            show_sanitized=False,
+            json_output=False,
+        )
+        rc = run_cmd(args)
+        assert rc == 0
+
+        text = out_file.read_text()
+        assert "UNSANITIZED" in text
+        assert "exec" in text
+
+    def test_one_missing_policy_file_returns_error(self, tmp_path: Path) -> None:
+        cpg_file = tmp_path / "cpg.json"
+        _write_cpg(_build_taint_cpg(), cpg_file)
+
+        existing_policy = tmp_path / "exists.yaml"
+        _write_policy(BASIC_POLICY, existing_policy)
+
+        args = Namespace(
+            cpg_file=cpg_file,
+            policy=[existing_policy, tmp_path / "missing.yaml"],
             output=None, show_sanitized=False, json_output=False,
         )
         rc = run_cmd(args)
