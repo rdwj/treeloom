@@ -1,6 +1,6 @@
 # treeloom
 
-> Language-agnostic Code Property Graph library for Python. Parses source code via tree-sitter, builds a unified graph (AST + control flow + data flow + call graph), and provides taint analysis, pattern matching, and visualization. Supports Python, JavaScript, TypeScript, Go, Java, C, C++, and Rust.
+> Language-agnostic Code Property Graph library for Python. Parses source code via tree-sitter, builds a unified graph (AST + control flow + data flow + call graph), and provides taint analysis, pattern matching, and visualization. Supports Python, JavaScript, TypeScript, Go, Java, C, C++, and Rust. 862 tests. Current version: 0.2.5.
 
 All public types are importable from the top-level `treeloom` package.
 
@@ -13,9 +13,29 @@ Building and analyzing a CPG follows four steps:
 3. **Analyze**: `cpg.taint(policy)` runs worklist-based forward taint analysis; `cpg.query()` provides path/reachability/pattern queries
 4. **Export**: `to_json(cpg)`, `to_dot(cpg)`, `generate_html(cpg)` serialize or visualize the graph
 
+## CLI
+
+All operations are available from the `treeloom` command:
+
+- `build` — Parse source files and write a CPG JSON file (`--progress`, `--language`, `--exclude`)
+- `info` — Display node/edge count statistics for a CPG JSON file
+- `query` — Filter nodes by kind/name/file/scope/annotation (`--output-format`, `--count`, `--limit`)
+- `edges` — Filter edges by kind/source/target (`--output-format`, `--limit`)
+- `taint` — Run YAML-policy-driven taint analysis (`--policy`, `--apply`, `--show-sanitized`)
+- `annotate` — Apply YAML annotation rules to a CPG and write annotated JSON
+- `pattern` — Match declarative node chains from a YAML pattern file
+- `subgraph` — Extract a BFS subgraph rooted at a function/class/file/node-id
+- `diff` — Compare two CPGs and report added/removed functions and calls
+- `viz` — Generate interactive HTML visualization (`--exclude-kind`, `--open`)
+- `dot` — Export DOT format with optional edge/node kind filtering
+- `serve` — Serve a CPG over a local HTTP JSON API (port 8080 by default)
+- `watch` — Rebuild CPG on file changes (polling, configurable interval)
+- `completions` — Print shell completion scripts (bash, zsh, fish)
+- `config` — Show resolved configuration (project + user config files)
+
 ## API Reference
 
-- [README](README.md): Installation, quick start, feature overview
+- [README](README.md): Installation, quick start, feature overview, changelog
 - [Full API specification](CLAUDE.md): Complete data model, method signatures, algorithms, and design rationale
 - [Sanicode integration guide](docs/sanicode-integration.md): How to use treeloom as a dependency for security analysis
 
@@ -28,7 +48,9 @@ Building and analyzing a CPG follows four steps:
 - `CpgNode`: Dataclass with `id: NodeId`, `kind: NodeKind`, `name: str`, `location: SourceLocation | None`, `scope: NodeId | None`, `attrs: dict`
 - `NodeId`: Opaque, hashable identifier. Never construct directly -- only use IDs returned by the builder or graph.
 - `TaintPolicy`: Consumer-provided callbacks -- `sources(node) -> TaintLabel | None`, `sinks(node) -> bool`, `sanitizers(node) -> bool`
-- `TaintResult`: Contains `paths: list[TaintPath]` with methods `unsanitized_paths()`, `sanitized_paths()`, `paths_to_sink()`, `labels_at()`
+- `TaintResult`: Contains `paths: list[TaintPath]` with methods `unsanitized_paths()`, `sanitized_paths()`, `paths_to_sink()`, `labels_at()`, `apply_to(cpg)`
+- `FunctionSummary` / `compute_summaries`: Per-function summary of which parameters flow to return values; used by the taint engine for inter-procedural analysis
+- `forward_reachable` / `backward_reachable`: BFS reachability helpers (edge-kind-filtered) exported from `treeloom.analysis.reachability`
 - `GraphQuery`: Path queries (`paths_between`, `reachable_from`, `reaching`), node lookup (`node_at`, `nodes_in_file`), pattern matching (`match_chain`)
 - `ChainPattern` / `StepMatcher`: Declarative pattern matching with wildcard support and edge-kind filtering
 - `Overlay` / `OverlayStyle`: Consumer-injected visual styling for HTML export
@@ -41,6 +63,10 @@ Building and analyzing a CPG follows four steps:
 - **NodeId is opaque**: Format is `"{kind}:{file}:{line}:{col}:{counter}"` but consumers must treat it as an opaque string. Never parse or construct NodeIds.
 - **Serialization round-trip**: `from_json(to_json(cpg))` always produces an equivalent graph. `from_dict(to_dict())` is the hard contract.
 - **MultiDiGraph**: Multiple edge kinds can exist between the same node pair (e.g., CONTAINS + DATA_FLOWS_TO). The backend uses NetworkX MultiDiGraph.
+- **Field sensitivity**: `obj.field_a` and `obj.field_b` are tracked as separate variable nodes; chained receivers like `request.form.attr` resolve recursively through DFG edges.
+- **String formatting generates DFG**: `.format()`, `%` operator, and f-strings all produce DATA_FLOWS_TO edges. This was the primary fix for taint false-negatives in 0.2.2.
+- **Chained method calls**: `.format().fetchone()` and similar chains are tracked through the DFG, so taint propagates across method chains.
+- **Decorators captured**: Decorator names are stored in `function_node.attrs["decorators"]` (list of strings, e.g. `["app.route"]`).
 - **Import noise in visualization**: Import nodes often dominate the graph (50%+ of nodes). Use `generate_html(cpg, exclude_kinds=frozenset({NodeKind.IMPORT}))` to omit them entirely, or use the default layers which put imports in a togglable layer that's off by default. CLI: `treeloom viz cpg.json --exclude-kind import`.
 - **Taint annotations on the graph**: After `result = cpg.taint(policy)`, call `result.apply_to(cpg)` to stamp taint status onto graph nodes/edges as annotations. Then subgraph extraction, serialization, and node inspection all carry taint info. CLI: `treeloom taint cpg.json --policy p.yaml --apply -o annotated.json`.
 - **Grammar packages are optional**: Core library works without them. Install `treeloom[languages]` for all grammars, or individual packages like `tree-sitter-python`.

@@ -1,6 +1,6 @@
 # treeloom
 
-> Language-agnostic Code Property Graph library for Python. Parses source code via tree-sitter, builds a unified graph (AST + control flow + data flow + call graph), and provides taint analysis, pattern matching, and visualization. Supports Python, JavaScript, TypeScript, Go, Java, C, C++, and Rust.
+> Language-agnostic Code Property Graph library for Python. Parses source code via tree-sitter, builds a unified graph (AST + control flow + data flow + call graph), and provides taint analysis, pattern matching, and visualization. Supports Python, JavaScript, TypeScript, Go, Java, C, C++, and Rust. 862 tests. Current version: 0.2.5.
 
 All public types are importable from the top-level `treeloom` package. Install with `pip install treeloom[languages]` for all grammar packages, or `pip install treeloom` for core only (no parsing without grammars).
 
@@ -156,7 +156,7 @@ Common CpgNode.attrs keys by kind:
 
 | NodeKind | Common attrs |
 |----------|-------------|
-| FUNCTION | is_async, is_method, is_static, decorators |
+| FUNCTION | is_async, is_method, is_static, decorators (list of strings) |
 | PARAMETER | type_annotation, position, default_value |
 | VARIABLE | type_annotation, is_global, is_field |
 | CALL | args_count, is_method_call, receiver |
@@ -204,17 +204,49 @@ class TaintResult:
     def unsanitized_paths(self) -> list[TaintPath]
     def sanitized_paths(self) -> list[TaintPath]
     def labels_at(self, node_id: NodeId) -> frozenset[TaintLabel]
+    def apply_to(self, cpg: CodePropertyGraph) -> None
 ```
 
 The taint engine uses worklist-based forward analysis over DATA_FLOWS_TO edges. Sanitizers mark paths as sanitized but do not stop propagation. Inter-procedural flow uses function summaries computed from param-to-return DFG paths.
 
 **Stamping taint onto the graph**: After running taint, call `result.apply_to(cpg)` to annotate every tainted node/edge in the CPG. This makes the graph self-describing — any node inspection, subgraph extraction, or serialization carries taint status:
+
 ```python
 result = cpg.taint(policy)
 result.apply_to(cpg)  # stamps tainted, taint_labels, taint_role, taint_sanitized
 # Now: cpg.get_annotation(node.id, "tainted") -> True/False
 # Subgraphs carry annotations: cpg.query().subgraph(func.id, max_depth=5)
 ```
+
+## Function Summaries
+
+```python
+@dataclass
+class FunctionSummary:
+    function_id: NodeId
+    function_name: str
+    params_to_return: list[int]                  # 0-based param positions that flow to return
+    params_to_sinks: dict[int, list[NodeId]]     # params that flow to internal sinks
+    introduces_taint: bool                        # function reads from an external source
+
+def compute_summaries(cpg: CodePropertyGraph) -> dict[NodeId, FunctionSummary]
+```
+
+Summaries are computed once per `build()` and cached. They enable inter-procedural taint without full function inlining. Both `FunctionSummary` and `compute_summaries` are exported from the top-level `treeloom` package.
+
+## Reachability
+
+```python
+from treeloom import forward_reachable, backward_reachable
+
+# BFS forward from a node, optionally filtered to specific edge kinds
+reachable: set[CpgNode] = forward_reachable(cpg, node_id, edge_kinds=frozenset({EdgeKind.DATA_FLOWS_TO}))
+
+# BFS backward (predecessors)
+ancestors: set[CpgNode] = backward_reachable(cpg, node_id)
+```
+
+These are convenience wrappers around `cpg.query().reachable_from()` and `cpg.query().reaching()`.
 
 ## Query API
 
@@ -281,8 +313,22 @@ html = generate_html(cpg, overlays=[overlay], title="Analysis")
 
 # Exclude noisy node kinds (imports typically dominate the graph)
 html = generate_html(cpg, exclude_kinds=frozenset({NodeKind.IMPORT, NodeKind.LITERAL}))
-# Default layers already put imports in a togglable layer that's OFF by default
+# Default layers: Structure, Data Flow, Control Flow, Call Graph (all ON), Imports (OFF)
 ```
+
+`generate_html` signature:
+
+```python
+def generate_html(
+    cpg: CodePropertyGraph,
+    layers: list[VisualizationLayer] | None = None,
+    overlays: list[Overlay] | None = None,
+    title: str = "Code Property Graph",
+    exclude_kinds: frozenset[NodeKind] | None = None,
+) -> str
+```
+
+The `exclude_kinds` parameter removes those node kinds entirely from the output, along with any edges whose source or target is an excluded node.
 
 ## Overlay System
 
@@ -317,6 +363,175 @@ html = generate_html(cpg, overlays=[overlay],
                      exclude_kinds=frozenset({NodeKind.IMPORT, NodeKind.LITERAL}))
 ```
 
+## CLI
+
+All CLI operations work on CPG JSON files produced by `treeloom build`. Output formats where applicable: `table` (default), `json`, `csv`, `tsv`, `jsonl`.
+
+`treeloom build` -- parse source and write a CPG JSON file:
+
+```
+treeloom build src/ -o cpg.json
+treeloom build src/ -o cpg.json --progress --language python --language java
+treeloom build src/ -o cpg.json --exclude "**/*.generated.py"
+```
+
+`treeloom info` -- display node/edge statistics:
+
+```
+treeloom info cpg.json
+treeloom info cpg.json --json
+```
+
+`treeloom query` -- filter nodes:
+
+```
+treeloom query cpg.json --kind function --name "handle_.*"
+treeloom query cpg.json --kind call --file routes.py --output-format json
+treeloom query cpg.json --scope my_function --count
+treeloom query cpg.json --annotation role --annotation-value sink
+```
+
+`treeloom edges` -- filter edges:
+
+```
+treeloom edges cpg.json --kind data_flows_to
+treeloom edges cpg.json --source "user_input" --target "execute"
+treeloom edges cpg.json --kind calls --output-format csv --limit 100
+```
+
+`treeloom taint` -- YAML-driven taint analysis:
+
+```
+treeloom taint cpg.json --policy policy.yaml
+treeloom taint cpg.json --policy base.yaml --policy overrides.yaml --show-sanitized
+treeloom taint cpg.json --policy policy.yaml --apply -o annotated.json
+treeloom taint cpg.json --policy policy.yaml --json
+```
+
+`treeloom annotate` -- apply YAML annotation rules:
+
+```
+treeloom annotate cpg.json --rules rules.yaml -o annotated.json
+```
+
+`treeloom pattern` -- match declarative node chains:
+
+```
+treeloom pattern cpg.json --pattern pattern.yaml
+treeloom pattern cpg.json --pattern pattern.yaml --json --limit 20
+```
+
+`treeloom subgraph` -- extract a focused subgraph:
+
+```
+treeloom subgraph cpg.json --function handle_request -o sub.json
+treeloom subgraph cpg.json --class UserController --depth 5 -o sub.json
+treeloom subgraph cpg.json --file routes.py -o sub.json
+treeloom subgraph cpg.json --root "function:src/api.py:42:0:1" -o sub.json
+```
+
+`treeloom diff` -- compare two CPGs:
+
+```
+treeloom diff old.json new.json
+treeloom diff old.json new.json --match-by-basename --strip-prefix /home/ci/build/
+```
+
+`treeloom viz` -- interactive HTML visualization:
+
+```
+treeloom viz cpg.json
+treeloom viz cpg.json -o report.html --title "My App" --open
+treeloom viz cpg.json --exclude-kind import --exclude-kind literal
+```
+
+`treeloom dot` -- Graphviz DOT export:
+
+```
+treeloom dot cpg.json | dot -Tsvg > graph.svg
+treeloom dot cpg.json --edge-kind data_flows_to --edge-kind calls -o flow.dot
+```
+
+`treeloom serve` -- local HTTP JSON API:
+
+```
+treeloom serve cpg.json
+treeloom serve cpg.json --host 0.0.0.0 --port 9090
+# Endpoints: GET /nodes, /edges, /node?id=..., /subgraph?root=...&depth=...
+```
+
+`treeloom watch` -- rebuild on file changes:
+
+```
+treeloom watch src/ -o cpg.json --interval 5
+```
+
+`treeloom completions` -- shell completion scripts:
+
+```
+treeloom completions bash >> ~/.bashrc
+treeloom completions zsh >> ~/.zshrc
+treeloom completions fish > ~/.config/fish/completions/treeloom.fish
+```
+
+`treeloom config` -- show resolved configuration.
+
+## YAML Schemas
+
+**Taint policy** (`--policy` for `treeloom taint`):
+
+```yaml
+sources:
+  - kind: parameter          # match by node kind
+    label: user_input        # label name attached to taint (default: "tainted")
+  - kind: call
+    name: "request\\..*"     # regex against node name
+  - kind: variable
+    attr:
+      is_global: true        # match against CpgNode.attrs keys
+
+sinks:
+  - kind: call
+    name: "execute|exec|eval"
+
+sanitizers:
+  - kind: call
+    name: "escape|sanitize|validate"
+
+propagators:                 # optional: describe how taint flows through a function
+  - name: "format"
+    param_to_return: true
+```
+
+**Annotation rules** (`--rules` for `treeloom annotate`):
+
+```yaml
+annotations:
+  - match:
+      kind: call
+      name: "execute|exec"
+    set:
+      role: sink
+      cwe_id: 78
+  - match:
+      kind: parameter
+      attr:
+        is_method: true
+    set:
+      role: entry_point
+```
+
+**Pattern file** (`--pattern` for `treeloom pattern`):
+
+```yaml
+steps:
+  - kind: parameter
+  - wildcard: true
+  - kind: call
+    name: "exec|eval|os\\.system"
+edge_kind: data_flows_to     # optional; omit to traverse all edge types
+```
+
 ## Supported Languages
 
 | Language | Extensions | Grammar Package |
@@ -337,6 +552,10 @@ html = generate_html(cpg, overlays=[overlay],
 - **NodeId is opaque**: Never parse or construct NodeIds. Only use IDs returned by the builder or graph methods.
 - **Round-trip contract**: `from_dict(to_dict())` and `from_json(to_json())` always produce equivalent graphs including all annotations.
 - **MultiDiGraph**: Multiple edge kinds can exist between the same node pair. The backend uses NetworkX MultiDiGraph.
+- **Field sensitivity**: `obj.field_a` and `obj.field_b` are tracked as separate variable nodes. Chained attribute receivers like `request.form.attr` resolve recursively through DFG edges (added in 0.2.5).
+- **String formatting generates DFG**: `.format()`, `%` operator, and f-strings all produce DATA_FLOWS_TO edges (fixed in 0.2.2 -- this was the primary cause of taint false-negatives).
+- **Chained method calls tracked**: `.format().fetchone()` and similar chains propagate taint across the full chain (fixed in 0.2.3).
+- **Decorators captured**: Decorator names are stored in `function_node.attrs["decorators"]` as a list of strings (e.g. `["app.route"]`). Useful for identifying Flask/FastAPI route handlers.
 - **Grammar packages are optional**: Core library works without them. Missing grammars produce clear ImportError messages, not crashes.
 - **No network calls**: treeloom is fully offline. No telemetry, no downloads at runtime.
 - **Backend-agnostic**: The public API never leaks NetworkX types. All return types are treeloom's own dataclasses and Python builtins.
