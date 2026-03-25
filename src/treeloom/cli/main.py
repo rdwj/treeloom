@@ -19,9 +19,11 @@ from treeloom.cli import (
     info,
     pattern_cmd,
     query,
+    serve_cmd,
     subgraph_cmd,
     taint_cmd,
     viz_cmd,
+    watch_cmd,
 )
 from treeloom.cli._util import format_error
 from treeloom.cli.config import load_config
@@ -54,10 +56,12 @@ def main(argv: list[str] | None = None) -> int:
     pattern_cmd.register(subparsers)
     query.register(subparsers)
     config.register(subparsers)
+    serve_cmd.register(subparsers)
     subgraph_cmd.register(subparsers)
     taint_cmd.register(subparsers)
     viz_cmd.register(subparsers)
     dot_cmd.register(subparsers)
+    watch_cmd.register(subparsers)
     completions_cmd.register(subparsers)
 
     args = parser.parse_args(argv)
