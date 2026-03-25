@@ -206,16 +206,16 @@ def test_annotate_json_output(tmp_path: Path, capsys):
 def test_annotate_missing_cpg_file(tmp_path: Path):
     rules_path = _write_rules(tmp_path, {"annotations": []})
     args = _make_args(tmp_path / "missing.json", rules_path)
-    rc = run_cmd(args)
-    assert rc == 1
+    with pytest.raises(FileNotFoundError):
+        run_cmd(args)
 
 
 def test_annotate_missing_rules_file(tmp_path: Path):
     cpg = _build_cpg()
     cpg_path = _write_cpg(tmp_path, cpg)
     args = _make_args(cpg_path, tmp_path / "missing.yaml")
-    rc = run_cmd(args)
-    assert rc == 1
+    with pytest.raises(FileNotFoundError):
+        run_cmd(args)
 
 
 def test_annotate_multiple_rules_count(tmp_path: Path, capsys):

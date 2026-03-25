@@ -257,8 +257,8 @@ class TestRunCmd:
             policy=[tmp_path / "policy.yaml"],
             output=None, show_sanitized=False, json_output=False,
         )
-        rc = run_cmd(args)
-        assert rc == 1
+        with pytest.raises(FileNotFoundError):
+            run_cmd(args)
 
     def test_missing_policy_file(self, tmp_path: Path) -> None:
         cpg_file = tmp_path / "cpg.json"
@@ -269,8 +269,8 @@ class TestRunCmd:
             policy=[tmp_path / "missing.yaml"],
             output=None, show_sanitized=False, json_output=False,
         )
-        rc = run_cmd(args)
-        assert rc == 1
+        with pytest.raises(FileNotFoundError):
+            run_cmd(args)
 
 
 class TestMergePolicyData:
@@ -415,7 +415,7 @@ class TestMultiPolicyRunCmd:
         assert "UNSANITIZED" in text
         assert "exec" in text
 
-    def test_one_missing_policy_file_returns_error(self, tmp_path: Path) -> None:
+    def test_one_missing_policy_file_raises(self, tmp_path: Path) -> None:
         cpg_file = tmp_path / "cpg.json"
         _write_cpg(_build_taint_cpg(), cpg_file)
 
@@ -427,5 +427,5 @@ class TestMultiPolicyRunCmd:
             policy=[existing_policy, tmp_path / "missing.yaml"],
             output=None, show_sanitized=False, json_output=False,
         )
-        rc = run_cmd(args)
-        assert rc == 1
+        with pytest.raises(FileNotFoundError):
+            run_cmd(args)

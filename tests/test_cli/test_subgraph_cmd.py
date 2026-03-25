@@ -6,6 +6,8 @@ import json
 from argparse import Namespace
 from pathlib import Path
 
+import pytest
+
 from treeloom.cli.subgraph_cmd import run_cmd
 from treeloom.export.json import to_json
 from treeloom.graph.cpg import CodePropertyGraph
@@ -194,10 +196,9 @@ class TestDepthLimiting:
 
 
 class TestMissingCpgFile:
-    def test_missing_file_returns_error(self, tmp_path: Path, capsys) -> None:
-        rc = run_cmd(_args(tmp_path / "ghost.json", tmp_path / "out.json", function="f"))
-        assert rc == 1
-        assert "ghost.json" in capsys.readouterr().err
+    def test_missing_file_raises(self, tmp_path: Path) -> None:
+        with pytest.raises(FileNotFoundError):
+            run_cmd(_args(tmp_path / "ghost.json", tmp_path / "out.json", function="f"))
 
 
 class TestNotFoundError:

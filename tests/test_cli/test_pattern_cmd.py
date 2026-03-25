@@ -227,8 +227,8 @@ def test_run_cmd_missing_cpg_file(tmp_path):
     pat_file = tmp_path / "pattern.yaml"
     pat_file.write_text("steps:\n  - kind: CALL\n")
     args = _args(tmp_path / "nope.json", pat_file)
-    rc = run_cmd(args)
-    assert rc == 1
+    with pytest.raises(FileNotFoundError):
+        run_cmd(args)
 
 
 def test_run_cmd_missing_pattern_file(tmp_path):
@@ -236,8 +236,8 @@ def test_run_cmd_missing_pattern_file(tmp_path):
     cpg_file = tmp_path / "cpg.json"
     _write_cpg(cpg, cpg_file)
     args = _args(cpg_file, tmp_path / "nope.yaml")
-    rc = run_cmd(args)
-    assert rc == 1
+    with pytest.raises(FileNotFoundError):
+        run_cmd(args)
 
 
 def test_run_cmd_invalid_pattern_yaml(tmp_path):

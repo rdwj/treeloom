@@ -105,7 +105,9 @@ class TestDotCmd:
             cpg_file=tmp_path / "nope.json", output=None,
             edge_kinds=None, node_kinds=None,
         )
-        assert run_cmd(args) == 1
+        import pytest
+        with pytest.raises(FileNotFoundError):
+            run_cmd(args)
 
     def test_node_kind_filter(self, tmp_path: Path) -> None:
         cpg = _build_cpg()

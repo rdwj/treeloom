@@ -7,6 +7,7 @@ import socket
 import threading
 import urllib.error
 import urllib.request
+from argparse import Namespace
 from http.server import HTTPServer
 from pathlib import Path
 from typing import Any
@@ -290,10 +291,7 @@ class TestNotFound:
 
 
 class TestRunCmd:
-    def test_missing_cpg_file_returns_1(self, tmp_path: Path, capsys) -> None:
-        from argparse import Namespace
-
+    def test_missing_cpg_file_raises(self, tmp_path: Path) -> None:
         args = Namespace(cpg_file=tmp_path / "ghost.json", host="127.0.0.1", port=9999)
-        rc = run_cmd(args)
-        assert rc == 1
-        assert "ghost.json" in capsys.readouterr().err
+        with pytest.raises(FileNotFoundError):
+            run_cmd(args)

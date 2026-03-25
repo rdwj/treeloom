@@ -54,5 +54,5 @@ class TestInfo:
 
     def test_info_missing_file(self, tmp_path: Path, default_cfg: Config) -> None:
         args = argparse.Namespace(cpg_file=tmp_path / "nope.json", as_json=False)
-        rc = run_info(args, default_cfg)
-        assert rc == 1
+        with pytest.raises(FileNotFoundError):
+            run_info(args, default_cfg)

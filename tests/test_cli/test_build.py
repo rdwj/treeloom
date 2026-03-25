@@ -192,3 +192,82 @@ class TestBuild:
         data_noprog = json.loads(out_noprog.read_text())
         assert len(data_prog["nodes"]) == len(data_noprog["nodes"])
         assert len(data_prog["edges"]) == len(data_noprog["edges"])
+
+    def test_progress_skips_unsupported_extensions(
+        self,
+        tmp_path: Path,
+        default_cfg: Config,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """--progress only counts files with supported extensions (issue #47)."""
+        src_dir = tmp_path / "src"
+        src_dir.mkdir()
+        # Two Python files (supported) and two unsupported files
+        (src_dir / "a.py").write_text("x = 1")
+        (src_dir / "b.py").write_text("y = 2")
+        (src_dir / "notes.txt").write_text("some notes")
+        (src_dir / "data.csv").write_text("a,b,c")
+
+        out = tmp_path / "out.json"
+        args = argparse.Namespace(
+            path=src_dir, output=out, exclude=None, quiet=True,
+            progress=True, languages=None,
+        )
+        rc = run_build(args, default_cfg)
+        assert rc == 0
+
+        err_text = capsys.readouterr().err
+        # Only the two .py files should appear in progress output
+        lines = [ln for ln in err_text.splitlines() if "Parsing" in ln]
+        assert len(lines) == 2
+        # Total reported should also be 2, not 4
+        assert "[1/2]" in err_text
+        assert "[2/2]" in err_text
+        assert "[3/" not in err_text
+        assert "[4/" not in err_text
+
+    def test_language_filter_restricts_to_python(
+        self,
+        tmp_path: Path,
+        default_cfg: Config,
+    ) -> None:
+        """--language python only processes .py files (issue #49)."""
+        src_dir = tmp_path / "src"
+        src_dir.mkdir()
+        (src_dir / "main.py").write_text("def foo(): pass")
+        # A JavaScript file that should NOT be processed
+        (src_dir / "app.js").write_text("function bar() {}")
+
+        out = tmp_path / "out.json"
+        args = argparse.Namespace(
+            path=src_dir, output=out, exclude=None, quiet=True,
+            progress=False, languages=["python"],
+        )
+        rc = run_build(args, default_cfg)
+        assert rc == 0
+
+        data = json.loads(out.read_text())
+        files_in_cpg = {
+            n.get("location", {}).get("file", "")
+            for n in data["nodes"]
+            if n.get("location")
+        }
+        assert any("main.py" in f for f in files_in_cpg), (
+            f"Expected main.py in CPG files, got: {files_in_cpg}"
+        )
+        assert not any("app.js" in f for f in files_in_cpg), (
+            f"Expected app.js excluded from CPG, got: {files_in_cpg}"
+        )
+
+    def test_language_filter_unknown_language_returns_error(
+        self,
+        tmp_path: Path,
+        default_cfg: Config,
+    ) -> None:
+        """--language with an unknown language name returns exit code 1."""
+        args = argparse.Namespace(
+            path=tmp_path, output=tmp_path / "out.json", exclude=None,
+            quiet=True, progress=False, languages=["cobol"],
+        )
+        rc = run_build(args, default_cfg)
+        assert rc == 1

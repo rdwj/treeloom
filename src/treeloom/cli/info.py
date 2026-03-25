@@ -7,7 +7,7 @@ import json
 from collections import Counter
 from pathlib import Path
 
-from treeloom.cli._util import err, format_table, load_cpg
+from treeloom.cli._util import format_table, load_cpg
 from treeloom.cli.config import Config
 
 
@@ -19,11 +19,7 @@ def register(subparsers: argparse._SubParsersAction) -> None:  # type: ignore[ty
 
 
 def run_info(args: argparse.Namespace, cfg: Config) -> int:
-    try:
-        cpg = load_cpg(args.cpg_file)
-    except FileNotFoundError:
-        err(f"File not found: {args.cpg_file}")
-        return 1
+    cpg = load_cpg(args.cpg_file)
 
     # Count nodes by kind
     node_counts: Counter[str] = Counter()

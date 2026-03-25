@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import re
-import sys
 from argparse import ArgumentParser, Namespace
 from pathlib import Path
 from typing import Any
@@ -60,24 +59,13 @@ def run_cmd(args: Namespace, _cfg: object = None) -> int:
     policy_paths: list[Path] = args.policy  # list due to action="append"
 
     if not cpg_path.is_file():
-        print(f"Error: CPG file not found: {cpg_path}", file=sys.stderr)
-        return 1
+        raise FileNotFoundError(cpg_path)
     for policy_path in policy_paths:
         if not policy_path.is_file():
-            print(f"Error: policy file not found: {policy_path}", file=sys.stderr)
-            return 1
+            raise FileNotFoundError(policy_path)
 
-    try:
-        cpg = from_json(cpg_path.read_text())
-    except Exception as exc:
-        print(f"Error loading CPG: {exc}", file=sys.stderr)
-        return 1
-
-    try:
-        policy = load_policies(policy_paths, cpg)
-    except Exception as exc:
-        print(f"Error loading policy: {exc}", file=sys.stderr)
-        return 1
+    cpg = from_json(cpg_path.read_text())
+    policy = load_policies(policy_paths, cpg)
 
     result = run_taint(cpg, policy)
 

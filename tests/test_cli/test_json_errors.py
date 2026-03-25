@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -100,3 +101,15 @@ class TestJsonErrors:
         assert "something went wrong" in err
         with pytest.raises(json.JSONDecodeError):
             json.loads(err.strip())
+
+    def test_subcommand_file_not_found_produces_json(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """--json-errors works end-to-end when a subcommand raises FileNotFoundError."""
+        missing = tmp_path / "nonexistent.json"
+        rc, _, err = _run(["--json-errors", "info", str(missing)], capsys)
+
+        assert rc == 1
+        obj = json.loads(err.strip())
+        assert obj["error"] == "file_not_found"
+        assert "message" in obj

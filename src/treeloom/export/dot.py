@@ -66,17 +66,24 @@ def to_dot(
         '  edge [fontname="Helvetica", fontsize=8];',
     ]
 
-    # Collect the set of node IDs that appear in filtered edges so we can
-    # optionally restrict the node list when edge_kinds is set.
-    included_node_ids: set[str] | None = None
+    # When edge_kinds is specified, only include nodes that appear in at least
+    # one edge of the requested kinds.  Compute that set up-front so the node
+    # loop below can filter accordingly.
+    connected_node_ids: set[str] | None = None
     if edge_kinds is not None:
-        included_node_ids = set()
+        connected_node_ids = set()
+        for edge in cpg.edges():
+            if edge.kind in edge_kinds:
+                connected_node_ids.add(str(edge.source))
+                connected_node_ids.add(str(edge.target))
 
     # Emit nodes.
     for node in cpg.nodes():
         if node_kinds is not None and node.kind not in node_kinds:
             continue
         id_str = str(node.id)
+        if connected_node_ids is not None and id_str not in connected_node_ids:
+            continue
         shape = _NODE_SHAPES.get(node.kind, "ellipse")
         label = _escape_dot(f"{node.kind.value}: {node.name}")
         lines.append(
@@ -97,9 +104,6 @@ def to_dot(
             f'  "{src}" -> "{tgt}" '
             f'[label="{label}", style={style}, color={color}, penwidth={penwidth}];'
         )
-        if included_node_ids is not None:
-            included_node_ids.add(str(edge.source))
-            included_node_ids.add(str(edge.target))
 
     lines.append("}")
     return "\n".join(lines) + "\n"

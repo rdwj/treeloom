@@ -11,6 +11,7 @@ from treeloom.cli._util import err, write_output
 from treeloom.cli.config import Config
 from treeloom.export.json import to_json
 from treeloom.graph.builder import _DEFAULT_EXCLUDES, CPGBuilder
+from treeloom.lang.registry import LanguageRegistry
 
 
 def register(subparsers: argparse._SubParsersAction) -> None:  # type: ignore[type-arg]
@@ -26,6 +27,10 @@ def register(subparsers: argparse._SubParsersAction) -> None:  # type: ignore[ty
         "--progress", action="store_true",
         help="Print each file as it is parsed (output to stderr)",
     )
+    p.add_argument(
+        "--language", action="append", default=None, metavar="LANG", dest="languages",
+        help="Only process files for this language (repeatable, e.g. python, javascript)",
+    )
     p.set_defaults(func=run_build)
 
 
@@ -38,22 +43,45 @@ def run_build(args: argparse.Namespace, cfg: Config) -> int:
     output: Path = args.output or Path(cfg.default_build_output)
     exclude = (args.exclude or []) + cfg.exclude_patterns
     show_progress: bool = getattr(args, "progress", False)
+    languages: list[str] | None = getattr(args, "languages", None)
 
-    builder = CPGBuilder()
+    registry = LanguageRegistry.default()
+
+    # Resolve the set of extensions to process when --language is specified.
+    lang_extensions: frozenset[str] | None = None
+    if languages:
+        exts: set[str] = set()
+        for lang in languages:
+            visitor = registry.get_visitor_by_name(lang.lower())
+            if visitor is None:
+                supported = ", ".join(sorted(registry._by_name))
+                err(f"Unknown language: {lang!r}. Supported: {supported}")
+                return 1
+            exts.update(visitor.extensions)
+        lang_extensions = frozenset(exts)
+
+    builder = CPGBuilder(registry=registry)
 
     if path.is_file():
         if show_progress:
             print(f"[1/1] Parsing {path}...", file=sys.stderr)
         builder.add_file(path)
-    elif show_progress:
+    elif show_progress or lang_extensions is not None:
+        # For --progress and/or --language we enumerate files explicitly so we
+        # can apply supported-extension and language filters before parsing.
+        supported_exts = registry.supported_extensions()
         all_patterns = _DEFAULT_EXCLUDES + exclude
         files = sorted(
             f for f in path.rglob("*")
-            if f.is_file() and not _should_exclude(f, path, all_patterns)
+            if f.is_file()
+            and not _should_exclude(f, path, all_patterns)
+            and f.suffix in supported_exts
+            and (lang_extensions is None or f.suffix in lang_extensions)
         )
         total = len(files)
         for i, f in enumerate(files, 1):
-            print(f"[{i}/{total}] Parsing {f}...", file=sys.stderr)
+            if show_progress:
+                print(f"[{i}/{total}] Parsing {f}...", file=sys.stderr)
             builder.add_file(f)
     else:
         builder.add_directory(path, exclude=exclude)

@@ -118,3 +118,18 @@ class TestDotOutput:
     def test_arrow_syntax(self, cpg: CodePropertyGraph):
         dot = to_dot(cpg)
         assert "->" in dot
+
+    def test_edge_kind_filter_prunes_disconnected_nodes(self, cpg: CodePropertyGraph):
+        """Nodes not connected by any edge of the filtered kinds are excluded (issue #48)."""
+        # The fixture CPG has: mod -CONTAINS-> fn, fn -DATA_FLOWS_TO-> var,
+        # fn -CALLS-> call, br -BRANCHES_TO-> blk, blk -FLOWS_TO-> var.
+        # When filtering to CALLS only, only fn and call should appear as nodes.
+        dot = to_dot(cpg, edge_kinds=frozenset({EdgeKind.CALLS}))
+        assert 'label="calls"' in dot
+        # fn (source) and call (target) must be present
+        assert "function: foo" in dot
+        assert "call: bar" in dot
+        # Nodes not part of any CALLS edge should not appear
+        assert "module: mymod" not in dot
+        assert "variable: x" not in dot
+        assert "literal:" not in dot

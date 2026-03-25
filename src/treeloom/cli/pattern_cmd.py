@@ -44,11 +44,9 @@ def run_cmd(args: Namespace, _cfg: object = None) -> int:
     pattern_path: Path = args.pattern
 
     if not cpg_path.is_file():
-        print(f"Error: CPG file not found: {cpg_path}", file=sys.stderr)
-        return 1
+        raise FileNotFoundError(cpg_path)
     if not pattern_path.is_file():
-        print(f"Error: pattern file not found: {pattern_path}", file=sys.stderr)
-        return 1
+        raise FileNotFoundError(pattern_path)
 
     cpg = load_cpg(cpg_path)
 

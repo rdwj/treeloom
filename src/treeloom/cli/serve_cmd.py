@@ -228,14 +228,9 @@ def _int_param(params: dict[str, list[str]], key: str, default: int) -> int:
 def run_cmd(args: argparse.Namespace, _cfg: Config | None = None) -> int:
     cpg_path: Path = args.cpg_file
     if not cpg_path.is_file():
-        print(f"Error: CPG file not found: {cpg_path}", file=sys.stderr)
-        return 1
+        raise FileNotFoundError(cpg_path)
 
-    try:
-        cpg = load_cpg(cpg_path)
-    except Exception as exc:  # noqa: BLE001
-        print(f"Error loading CPG: {exc}", file=sys.stderr)
-        return 1
+    cpg = load_cpg(cpg_path)
 
     CPGHandler.cpg = cpg
 

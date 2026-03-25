@@ -44,14 +44,9 @@ def run_cmd(args: Namespace, _cfg: object = None) -> int:
     cpg_path: Path = args.cpg_file
 
     if not cpg_path.is_file():
-        print(f"Error: CPG file not found: {cpg_path}", file=sys.stderr)
-        return 1
+        raise FileNotFoundError(cpg_path)
 
-    try:
-        cpg = load_cpg(cpg_path)
-    except Exception as exc:
-        print(f"Error loading CPG: {exc}", file=sys.stderr)
-        return 1
+    cpg = load_cpg(cpg_path)
 
     # Resolve the root node based on which flag was supplied.
     root_id, root_label = _find_root(cpg, args)

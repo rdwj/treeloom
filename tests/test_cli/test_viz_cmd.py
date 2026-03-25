@@ -5,6 +5,8 @@ from __future__ import annotations
 from argparse import Namespace
 from pathlib import Path
 
+import pytest
+
 from treeloom.cli.viz_cmd import run_cmd
 from treeloom.export.json import to_json
 from treeloom.graph.cpg import CodePropertyGraph
@@ -74,4 +76,5 @@ class TestVizCmd:
             cpg_file=tmp_path / "no.json", output=None,
             title="T", open_browser=False,
         )
-        assert run_cmd(args) == 1
+        with pytest.raises(FileNotFoundError):
+            run_cmd(args)
