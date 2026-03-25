@@ -6,6 +6,7 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from treeloom.lang._scope import ScopeStack
 from treeloom.lang.base import TreeSitterVisitor
 from treeloom.model.edges import EdgeKind
 from treeloom.model.location import SourceLocation
@@ -106,10 +107,12 @@ class JavaVisitor(TreeSitterVisitor):
             ctx.current_scope,
         )
         ctx.scope_stack.append(class_id)
+        ctx.defined_vars.push()
         body = node.child_by_field_name("body")
         if body is not None:
             for child in body.children:
                 self._visit_node(child, ctx)
+        ctx.defined_vars.pop()
         ctx.scope_stack.pop()
 
     def _visit_method_declaration(
@@ -125,6 +128,7 @@ class JavaVisitor(TreeSitterVisitor):
             params=None,  # _emit_typed_params handles params with type annotations
         )
         ctx.scope_stack.append(func_id)
+        ctx.defined_vars.push()
         params_node = node.child_by_field_name("parameters")
         if params_node is not None:
             self._emit_typed_params(params_node, func_id, ctx)
@@ -132,6 +136,7 @@ class JavaVisitor(TreeSitterVisitor):
         if body is not None:
             for child in body.children:
                 self._visit_node(child, ctx)
+        ctx.defined_vars.pop()
         ctx.scope_stack.pop()
 
     def _visit_constructor_declaration(
@@ -147,6 +152,7 @@ class JavaVisitor(TreeSitterVisitor):
             params=None,
         )
         ctx.scope_stack.append(func_id)
+        ctx.defined_vars.push()
         params_node = node.child_by_field_name("parameters")
         if params_node is not None:
             self._emit_typed_params(params_node, func_id, ctx)
@@ -154,6 +160,7 @@ class JavaVisitor(TreeSitterVisitor):
         if body is not None:
             for child in body.children:
                 self._visit_node(child, ctx)
+        ctx.defined_vars.pop()
         ctx.scope_stack.pop()
 
     def _visit_local_variable_declaration(
@@ -528,7 +535,7 @@ class _VisitContext:
         self.file_path = file_path
         self.source = source
         self.scope_stack: list[NodeId] = []
-        self.defined_vars: dict[str, NodeId] = {}
+        self.defined_vars: ScopeStack = ScopeStack()
 
     @property
     def current_scope(self) -> NodeId:

@@ -8,6 +8,7 @@ from typing import TYPE_CHECKING, Any
 
 import tree_sitter
 
+from treeloom.lang._scope import ScopeStack
 from treeloom.lang.base import TreeSitterVisitor
 from treeloom.model.edges import EdgeKind
 from treeloom.model.nodes import NodeKind
@@ -131,12 +132,14 @@ class TypeScriptVisitor(TreeSitterVisitor):
         loc = self._location(node, ctx.file_path)
         class_id = ctx.emitter.emit_class(class_name, loc, ctx.current_scope)
         ctx.scope_stack.append(class_id)
+        ctx.defined_vars.push()
 
         body = node.child_by_field_name("body")
         if body is not None:
             for child in body.children:
                 self._visit_node(child, ctx)
 
+        ctx.defined_vars.pop()
         ctx.scope_stack.pop()
 
     def _visit_interface_declaration(
@@ -179,10 +182,12 @@ class TypeScriptVisitor(TreeSitterVisitor):
         )
 
         ctx.scope_stack.append(func_id)
+        ctx.defined_vars.push()
         body = node.child_by_field_name("body")
         if body is not None:
             for child in body.children:
                 self._visit_node(child, ctx)
+        ctx.defined_vars.pop()
         ctx.scope_stack.pop()
 
     def _visit_method_definition(
@@ -203,10 +208,12 @@ class TypeScriptVisitor(TreeSitterVisitor):
         )
 
         ctx.scope_stack.append(func_id)
+        ctx.defined_vars.push()
         body = node.child_by_field_name("body")
         if body is not None:
             for child in body.children:
                 self._visit_node(child, ctx)
+        ctx.defined_vars.pop()
         ctx.scope_stack.pop()
 
     def _visit_lexical_declaration(
@@ -251,6 +258,7 @@ class TypeScriptVisitor(TreeSitterVisitor):
                 var_name, loc, ctx.current_scope, params=param_names, is_async=is_async
             )
             ctx.scope_stack.append(func_id)
+            ctx.defined_vars.push()
             body = value_node.child_by_field_name("body")
             if body is not None:
                 if body.type == "statement_block":
@@ -259,6 +267,7 @@ class TypeScriptVisitor(TreeSitterVisitor):
                 else:
                     # Expression body: `(x) => x * 2`
                     self._visit_expression(body, ctx)
+            ctx.defined_vars.pop()
             ctx.scope_stack.pop()
             return
 
@@ -535,7 +544,7 @@ class _VisitContext:
         self.file_path = file_path
         self.source = source
         self.scope_stack: list[NodeId] = []
-        self.defined_vars: dict[str, NodeId] = {}
+        self.defined_vars: ScopeStack = ScopeStack()
 
     @property
     def current_scope(self) -> NodeId:

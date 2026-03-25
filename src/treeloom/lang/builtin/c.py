@@ -6,6 +6,7 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from treeloom.lang._scope import ScopeStack
 from treeloom.lang.base import TreeSitterVisitor
 from treeloom.model.edges import EdgeKind
 from treeloom.model.nodes import NodeKind
@@ -102,8 +103,10 @@ class CVisitor(TreeSitterVisitor):
         loc = self._location(node, ctx.file_path)
         class_id = ctx.emitter.emit_class(struct_name, loc, ctx.current_scope)
         ctx.scope_stack.append(class_id)
+        ctx.defined_vars.push()
         for child in body.children:
             self._visit_node(child, ctx)
+        ctx.defined_vars.pop()
         ctx.scope_stack.pop()
 
     def _visit_type_definition(
@@ -133,6 +136,7 @@ class CVisitor(TreeSitterVisitor):
         # annotations. emit_function with params= creates nodes without types.
         func_id = ctx.emitter.emit_function(func_name, loc, scope, params=None)
         ctx.scope_stack.append(func_id)
+        ctx.defined_vars.push()
         for i, param_node in enumerate(param_nodes):
             self._emit_parameter(param_node, func_id, i, ctx)
 
@@ -140,6 +144,7 @@ class CVisitor(TreeSitterVisitor):
         if body is not None:
             for child in body.children:
                 self._visit_node(child, ctx)
+        ctx.defined_vars.pop()
         ctx.scope_stack.pop()
 
     def _emit_parameter(
@@ -406,7 +411,7 @@ class _VisitContext:
         self.file_path = file_path
         self.source = source
         self.scope_stack: list[NodeId] = []
-        self.defined_vars: dict[str, NodeId] = {}
+        self.defined_vars: ScopeStack = ScopeStack()
 
     @property
     def current_scope(self) -> NodeId:

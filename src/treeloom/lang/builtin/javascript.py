@@ -6,6 +6,7 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from treeloom.lang._scope import ScopeStack
 from treeloom.lang.base import TreeSitterVisitor
 from treeloom.model.edges import EdgeKind
 from treeloom.model.nodes import NodeKind
@@ -136,12 +137,14 @@ class JavaScriptVisitor(TreeSitterVisitor):
 
         class_id = ctx.emitter.emit_class(class_name, loc, ctx.current_scope)
         ctx.scope_stack.append(class_id)
+        ctx.defined_vars.push()
 
         body = node.child_by_field_name("body")
         if body is not None:
             for child in body.children:
                 self._visit_node(child, ctx)
 
+        ctx.defined_vars.pop()
         ctx.scope_stack.pop()
 
     def _visit_function_declaration(
@@ -205,6 +208,7 @@ class JavaScriptVisitor(TreeSitterVisitor):
         )
 
         ctx.scope_stack.append(func_id)
+        ctx.defined_vars.push()
 
         body = node.child_by_field_name("body")
         if body is not None:
@@ -215,6 +219,7 @@ class JavaScriptVisitor(TreeSitterVisitor):
                 # Arrow function with expression body (e.g. `x => x * 2`)
                 self._visit_expression(body, ctx)
 
+        ctx.defined_vars.pop()
         ctx.scope_stack.pop()
 
     def _visit_lexical_declaration(
@@ -584,7 +589,7 @@ class _VisitContext:
         self.file_path = file_path
         self.source = source
         self.scope_stack: list[NodeId] = []
-        self.defined_vars: dict[str, NodeId] = {}
+        self.defined_vars: ScopeStack = ScopeStack()
         self.pending_func_name: str | None = None
 
     @property

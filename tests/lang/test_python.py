@@ -323,6 +323,110 @@ class TestAugmentedAssignment:
         assert loops[0].attrs["iterator_var"] == "item"
 
 
+class TestNestedScopes:
+    """Verify that nested functions produce separate variable scopes."""
+
+    @pytest.fixture()
+    def cpg(self):
+        return _build("nested_scopes.py")
+
+    def test_outer_and_inner_both_have_x(self, cpg):
+        """Both outer and inner should have their own VARIABLE node for 'x'."""
+        x_vars = [n for n in cpg.nodes(kind=NodeKind.VARIABLE) if n.name == "x"]
+        assert len(x_vars) == 2, (
+            f"Expected 2 VARIABLE nodes named 'x' (outer + inner), got {len(x_vars)}"
+        )
+
+    def test_outer_return_flows_from_outer_x(self, cpg):
+        """'return x' in outer() should flow from outer's x, not inner's x."""
+        # The outer function's return should get data flow from the outer x
+        outer_func = next(
+            n for n in cpg.nodes(kind=NodeKind.FUNCTION) if n.name == "outer"
+        )
+        # Get all x variable nodes and figure out which is in outer scope
+        x_vars = [n for n in cpg.nodes(kind=NodeKind.VARIABLE) if n.name == "x"]
+        outer_x_nodes = [
+            v for v in x_vars
+            if cpg.scope_of(v.id) is not None
+            and cpg.scope_of(v.id).id == outer_func.id
+        ]
+        assert len(outer_x_nodes) >= 1, "Expected at least one 'x' scoped to outer()"
+
+        # The return node in outer should have data flow from an outer x
+        returns_in_outer = [
+            n for n in cpg.nodes(kind=NodeKind.RETURN)
+            if cpg.scope_of(n.id) is not None
+            and cpg.scope_of(n.id).id == outer_func.id
+        ]
+        assert len(returns_in_outer) == 1, "Expected one RETURN in outer()"
+
+        # Check DATA_FLOWS_TO edges reaching the return node
+        ret_predecessors = cpg.predecessors(
+            returns_in_outer[0].id, edge_kind=EdgeKind.DATA_FLOWS_TO
+        )
+        pred_ids = {p.id for p in ret_predecessors}
+        outer_x_ids = {v.id for v in outer_x_nodes}
+        assert pred_ids & outer_x_ids, (
+            "outer()'s return should receive data flow from outer's x, "
+            f"but predecessors are {[p.name for p in ret_predecessors]}"
+        )
+
+    def test_shadowing_dangerous_gets_outer_data(self, cpg):
+        """dangerous(data) in shadowing() should wire to outer 'data', not inner's."""
+        shadowing_func = next(
+            n for n in cpg.nodes(kind=NodeKind.FUNCTION) if n.name == "shadowing"
+        )
+        # Find the dangerous() call
+        dangerous_calls = [
+            n for n in cpg.nodes(kind=NodeKind.CALL)
+            if n.name == "dangerous"
+        ]
+        assert len(dangerous_calls) == 1
+
+        # The argument to dangerous should be the outer 'data' variable
+        predecessors = cpg.predecessors(
+            dangerous_calls[0].id, edge_kind=EdgeKind.DATA_FLOWS_TO
+        )
+        pred_names = {p.name for p in predecessors}
+        assert "data" in pred_names, (
+            f"dangerous() should receive data flow from 'data', got {pred_names}"
+        )
+
+        # Verify the data variable is scoped to shadowing(), not helper()
+        data_preds = [p for p in predecessors if p.name == "data"]
+        for dp in data_preds:
+            scope = cpg.scope_of(dp.id)
+            assert scope is not None
+            assert scope.id == shadowing_func.id, (
+                f"'data' flowing to dangerous() should be scoped to shadowing(), "
+                f"but is scoped to {scope.name}"
+            )
+
+    def test_inner_process_gets_inner_data(self, cpg):
+        """process(data) inside helper() should wire to inner 'data'."""
+        helper_func = next(
+            n for n in cpg.nodes(kind=NodeKind.FUNCTION) if n.name == "helper"
+        )
+        process_calls = [
+            n for n in cpg.nodes(kind=NodeKind.CALL) if n.name == "process"
+        ]
+        assert len(process_calls) == 1
+
+        predecessors = cpg.predecessors(
+            process_calls[0].id, edge_kind=EdgeKind.DATA_FLOWS_TO
+        )
+        data_preds = [p for p in predecessors if p.name == "data"]
+        assert len(data_preds) >= 1, "process() should receive data flow from 'data'"
+
+        for dp in data_preds:
+            scope = cpg.scope_of(dp.id)
+            assert scope is not None
+            assert scope.id == helper_func.id, (
+                f"'data' flowing to process() should be scoped to helper(), "
+                f"but is scoped to {scope.name}"
+            )
+
+
 class TestAddSource:
     def test_add_source_with_language(self):
         source = b"def hello(): pass"

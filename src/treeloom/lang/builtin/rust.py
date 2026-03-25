@@ -6,6 +6,7 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from treeloom.lang._scope import ScopeStack
 from treeloom.lang.base import TreeSitterVisitor
 from treeloom.model.edges import EdgeKind
 from treeloom.model.nodes import NodeKind
@@ -131,6 +132,7 @@ class RustVisitor(TreeSitterVisitor):
         class_id = ctx.emitter.emit_class(struct_name, loc, ctx.current_scope)
         ctx.struct_map[struct_name] = class_id
         ctx.scope_stack.append(class_id)
+        ctx.defined_vars.push()
 
         # Emit struct fields as VARIABLE nodes
         field_list = node.child_by_field_name("body")
@@ -139,6 +141,7 @@ class RustVisitor(TreeSitterVisitor):
                 if child.type == "field_declaration":
                     self._visit_field_declaration(child, ctx)
 
+        ctx.defined_vars.pop()
         ctx.scope_stack.pop()
 
     def _visit_enum_item(
@@ -198,9 +201,11 @@ class RustVisitor(TreeSitterVisitor):
         )
 
         ctx.scope_stack.append(func_id)
+        ctx.defined_vars.push()
         body = node.child_by_field_name("body")
         if body is not None:
             self._visit_block(body, ctx)
+        ctx.defined_vars.pop()
         ctx.scope_stack.pop()
 
     def _visit_use_declaration(
@@ -563,7 +568,7 @@ class _VisitContext:
         self.file_path = file_path
         self.source = source
         self.scope_stack: list[NodeId] = []
-        self.defined_vars: dict[str, NodeId] = {}
+        self.defined_vars: ScopeStack = ScopeStack()
         self.struct_map: dict[str, NodeId] = {}
 
     @property

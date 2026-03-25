@@ -6,6 +6,7 @@ import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from treeloom.lang._scope import ScopeStack
 from treeloom.lang.base import TreeSitterVisitor
 from treeloom.model.edges import EdgeKind
 from treeloom.model.nodes import NodeKind
@@ -146,6 +147,7 @@ class GoVisitor(TreeSitterVisitor):
 
         class_id = ctx.emitter.emit_class(type_name, loc, scope)
         ctx.scope_stack.append(class_id)
+        ctx.defined_vars.push()
 
         # Emit struct fields as VARIABLE nodes. field_declaration_list is an
         # unnamed child of struct_type (no named field access via API).
@@ -155,6 +157,7 @@ class GoVisitor(TreeSitterVisitor):
                     if field_decl.type == "field_declaration":
                         self._visit_field_declaration(field_decl, ctx)
 
+        ctx.defined_vars.pop()
         ctx.scope_stack.pop()
 
     def _visit_field_declaration(
@@ -185,9 +188,11 @@ class GoVisitor(TreeSitterVisitor):
         func_id = ctx.emitter.emit_function(func_name, loc, scope, params=param_names)
 
         ctx.scope_stack.append(func_id)
+        ctx.defined_vars.push()
         body = node.child_by_field_name("body")
         if body is not None:
             self._visit_block(body, ctx)
+        ctx.defined_vars.pop()
         ctx.scope_stack.pop()
 
     def _visit_method_declaration(
@@ -212,9 +217,11 @@ class GoVisitor(TreeSitterVisitor):
         func_id = ctx.emitter.emit_function(method_name, loc, scope, params=param_names)
 
         ctx.scope_stack.append(func_id)
+        ctx.defined_vars.push()
         body = node.child_by_field_name("body")
         if body is not None:
             self._visit_block(body, ctx)
+        ctx.defined_vars.pop()
         ctx.scope_stack.pop()
 
     def _visit_block(self, node: tree_sitter.Node, ctx: _VisitContext) -> None:
@@ -552,7 +559,7 @@ class _VisitContext:
         self.file_path = file_path
         self.source = source
         self.scope_stack: list[NodeId] = []
-        self.defined_vars: dict[str, NodeId] = {}
+        self.defined_vars: ScopeStack = ScopeStack()
 
     @property
     def current_scope(self) -> NodeId:
