@@ -9,8 +9,7 @@ from pathlib import Path
 import pytest
 import yaml
 
-from treeloom.analysis.taint import TaintLabel
-from treeloom.cli.taint_cmd import load_policy, run_cmd, _matches
+from treeloom.cli.taint_cmd import _matches, load_policy, run_cmd
 from treeloom.export.json import to_json
 from treeloom.graph.cpg import CodePropertyGraph
 from treeloom.model.edges import CpgEdge, EdgeKind

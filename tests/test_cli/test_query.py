@@ -58,7 +58,11 @@ class TestQuery:
         assert rc == 0
         out = capsys.readouterr().out
         # Every data line should be a function
-        lines = [l for l in out.strip().split("\n") if l and not l.startswith("-")]
+        lines = [
+            line
+            for line in out.strip().split("\n")
+            if line and not line.startswith("-")
+        ]
         for line in lines[1:]:  # skip header
             assert line.strip().startswith("function")
 
@@ -88,7 +92,11 @@ class TestQuery:
         assert rc == 0
         out = capsys.readouterr().out
         # Header + separator + at most 2 data lines
-        data_lines = [l for l in out.strip().split("\n") if l and not l.startswith("-")]
+        data_lines = [
+            line
+            for line in out.strip().split("\n")
+            if line and not line.startswith("-")
+        ]
         assert len(data_lines) <= 3  # header + 2 data
 
     def test_query_json_output(

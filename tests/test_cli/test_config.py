@@ -30,7 +30,12 @@ class TestConfigDefaults:
 
 
 class TestConfigInit:
-    def test_init_creates_file(self, tmp_path: Path, default_cfg: Config, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_init_creates_file(
+        self,
+        tmp_path: Path,
+        default_cfg: Config,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         monkeypatch.chdir(tmp_path)
         args = argparse.Namespace(
             init=True, set=None, unset=None, use_global=False, show=False,
@@ -42,7 +47,12 @@ class TestConfigInit:
         data = yaml.safe_load(created.read_text())
         assert "query_limit" in data
 
-    def test_init_refuses_overwrite(self, tmp_path: Path, default_cfg: Config, monkeypatch: pytest.MonkeyPatch) -> None:
+    def test_init_refuses_overwrite(
+        self,
+        tmp_path: Path,
+        default_cfg: Config,
+        monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
         monkeypatch.chdir(tmp_path)
         (tmp_path / ".treeloom.yaml").write_text("existing: true\n")
         args = argparse.Namespace(

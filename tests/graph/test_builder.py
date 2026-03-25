@@ -20,7 +20,6 @@ def builder() -> CPGBuilder:
 
 class TestNodeIdGeneration:
     def test_id_format(self, builder: CPGBuilder):
-        loc = SourceLocation(file=Path("test.py"), line=5, column=3)
         node_id = builder.emit_module("test", Path("test.py"))
         id_str = str(node_id)
         assert id_str.startswith("module:")
@@ -28,7 +27,6 @@ class TestNodeIdGeneration:
         assert ":1:" in id_str  # line 1
 
     def test_ids_are_unique(self, builder: CPGBuilder):
-        loc = SourceLocation(file=Path("test.py"), line=1, column=0)
         id1 = builder.emit_module("a", Path("a.py"))
         id2 = builder.emit_module("b", Path("b.py"))
         assert id1 != id2

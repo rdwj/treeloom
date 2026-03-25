@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from treeloom.graph.cpg import CodePropertyGraph
 from treeloom.model.edges import EdgeKind
-from treeloom.model.nodes import CpgNode, NodeId, NodeKind
+from treeloom.model.nodes import NodeId, NodeKind
 from treeloom.query.pattern import ChainPattern, StepMatcher, match_chain
 
 from .conftest import add_edge, make_node

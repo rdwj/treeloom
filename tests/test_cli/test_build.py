@@ -24,7 +24,9 @@ def default_cfg() -> Config:
 
 
 class TestBuild:
-    def test_build_single_file(self, fixture_dir: Path, tmp_path: Path, default_cfg: Config) -> None:
+    def test_build_single_file(
+        self, fixture_dir: Path, tmp_path: Path, default_cfg: Config
+    ) -> None:
         out = tmp_path / "out.json"
         args = argparse.Namespace(
             path=fixture_dir / "simple_function.py",
@@ -66,7 +68,11 @@ class TestBuild:
         assert cpg.node_count > 0
 
     def test_build_quiet_suppresses_output(
-        self, fixture_dir: Path, tmp_path: Path, default_cfg: Config, capsys: pytest.CaptureFixture[str],
+        self,
+        fixture_dir: Path,
+        tmp_path: Path,
+        default_cfg: Config,
+        capsys: pytest.CaptureFixture[str],
     ) -> None:
         out = tmp_path / "out.json"
         args = argparse.Namespace(
@@ -89,7 +95,9 @@ class TestBuild:
         rc = run_build(args, default_cfg)
         assert rc == 1
 
-    def test_build_with_exclude(self, fixture_dir: Path, tmp_path: Path, default_cfg: Config) -> None:
+    def test_build_with_exclude(
+        self, fixture_dir: Path, tmp_path: Path, default_cfg: Config
+    ) -> None:
         out = tmp_path / "out.json"
         args = argparse.Namespace(
             path=fixture_dir,
@@ -100,5 +108,9 @@ class TestBuild:
         run_build(args, default_cfg)
         data = json.loads(out.read_text())
         # data_flow.py should be excluded -- no nodes referencing it
-        files_in_cpg = {n.get("location", {}).get("file", "") for n in data["nodes"] if n.get("location")}
+        files_in_cpg = {
+            n.get("location", {}).get("file", "")
+            for n in data["nodes"]
+            if n.get("location")
+        }
         assert not any("data_flow" in f for f in files_in_cpg)

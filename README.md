@@ -205,6 +205,14 @@ mypy src/treeloom/
 
 ## Changelog
 
+### Version 0.2.0
+
+- CLI with 7 subcommands: `build`, `info`, `query`, `taint`, `viz`, `dot`, `config`
+- YAML-based taint policies for CLI-driven analysis (sources, sinks, sanitizers, propagators)
+- Project and user configuration via `.treeloom.yaml` and `~/.config/treeloom/config.yaml`
+- Works with `pip install treeloom`, `uvx treeloom`, and `uv tool install treeloom`
+- 585 tests
+
 ### Version 0.1.0
 
 - Initial release

@@ -4,14 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
-import pytest
-
 from treeloom.graph.cpg import CodePropertyGraph
-from treeloom.model.edges import CpgEdge, EdgeKind
-from treeloom.model.nodes import CpgNode, NodeId, NodeKind
-from treeloom.query.api import GraphQuery
+from treeloom.model.edges import EdgeKind
+from treeloom.model.nodes import NodeId, NodeKind
 
-from .conftest import FAKE_FILE, OTHER_FILE, add_edge, make_node
+from .conftest import FAKE_FILE, OTHER_FILE, make_node
 
 
 class TestPathsBetween:

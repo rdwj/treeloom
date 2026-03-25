@@ -100,8 +100,20 @@ class TestCpgNode:
         assert "sentinel" not in repr(node)
 
     def test_tree_node_not_in_comparison(self):
-        a = CpgNode(id=NodeId("1"), kind=NodeKind.VARIABLE, name="x", location=None, _tree_node="a")
-        b = CpgNode(id=NodeId("1"), kind=NodeKind.VARIABLE, name="x", location=None, _tree_node="b")
+        a = CpgNode(
+            id=NodeId("1"),
+            kind=NodeKind.VARIABLE,
+            name="x",
+            location=None,
+            _tree_node="a",
+        )
+        b = CpgNode(
+            id=NodeId("1"),
+            kind=NodeKind.VARIABLE,
+            name="x",
+            location=None,
+            _tree_node="b",
+        )
         assert a == b
 
     def test_default_attrs_independent(self):
