@@ -341,22 +341,115 @@ class JavaVisitor(TreeSitterVisitor):
             self._visit_assignment_expression(node, ctx)
             return None
         if node.type == "binary_expression":
-            left = node.child_by_field_name("left")
-            right = node.child_by_field_name("right")
-            if left:
-                self._visit_expression(left, ctx)
-            if right:
-                self._visit_expression(right, ctx)
-            return None
+            return self._visit_binary_expression(node, ctx)
         if node.type == "parenthesized_expression":
             for child in node.children:
                 if child.is_named:
+                    return self._visit_expression(child, ctx)
+            return None
+        if node.type == "lambda_expression":
+            return self._visit_lambda(node, ctx)
+        if node.type in ("array_creation_expression", "array_initializer"):
+            return self._visit_array_expression(node, ctx)
+        if node.type == "cast_expression":
+            # `(Type) expr` — propagate the inner expression's node
+            for child in node.children:
+                if child.is_named and child.type not in (
+                    "type_identifier", "generic_type", "integral_type",
+                    "floating_point_type", "boolean_type", "void_type",
+                ):
                     return self._visit_expression(child, ctx)
             return None
         for child in node.children:
             if child.is_named:
                 self._visit_expression(child, ctx)
         return None
+
+    def _visit_binary_expression(
+        self, node: tree_sitter.Node, ctx: _VisitContext
+    ) -> NodeId | None:
+        """Handle binary expressions, emitting a concat call node for `+`.
+
+        For the string concatenation operator (`+`) we emit a synthetic CALL
+        node named ``<string_concat>`` and wire DATA_FLOWS_TO edges from any
+        variable/call operands into it.  This ensures that taint carried by a
+        variable survives a pattern like ``"SELECT " + userInput``.
+
+        For all other operators we still visit both operands (so any nested
+        calls are processed) but return None because no single node represents
+        the compound result.
+        """
+        left = node.child_by_field_name("left")
+        right = node.child_by_field_name("right")
+
+        # Find operator
+        op = None
+        for child in node.children:
+            if not child.is_named and child.type not in (
+                "identifier", "string_literal"
+            ):
+                op = child.type
+                break
+
+        left_id = self._visit_expression(left, ctx) if left else None
+        right_id = self._visit_expression(right, ctx) if right else None
+
+        if op == "+":
+            # Emit a synthetic concat call so taint can flow through it.
+            concat_id = ctx.emitter.emit_call(
+                "<string_concat>",
+                self._location(node, ctx.file_path),
+                ctx.current_scope,
+            )
+            if left_id is not None:
+                ctx.emitter.emit_data_flow(left_id, concat_id)
+            if right_id is not None:
+                ctx.emitter.emit_data_flow(right_id, concat_id)
+            return concat_id
+
+        return None
+
+    def _visit_lambda(
+        self, node: tree_sitter.Node, ctx: _VisitContext
+    ) -> NodeId | None:
+        """Visit a lambda expression body so statements inside are processed."""
+        # Lambda structure: params `->` body
+        # body is the last named child after the `->` token.
+        after_arrow = False
+        for child in node.children:
+            if child.type == "->":
+                after_arrow = True
+                continue
+            if after_arrow:
+                if child.type == "block":
+                    for stmt in child.children:
+                        self._visit_node(stmt, ctx)
+                    return None
+                elif child.is_named:
+                    return self._visit_expression(child, ctx)
+        return None
+
+    def _visit_array_expression(
+        self, node: tree_sitter.Node, ctx: _VisitContext
+    ) -> NodeId | None:
+        """Visit array creation/initializer, propagating taint from elements."""
+        # Collect any tainted element nodes and return the last non-None one.
+        # A full solution would emit an array node, but for taint purposes
+        # visiting the elements (so their DFG is recorded) is sufficient.
+        last_id: NodeId | None = None
+        target = node
+        if node.type == "array_creation_expression":
+            # Find the initializer if present
+            for child in node.children:
+                if child.type == "array_initializer":
+                    target = child
+                    break
+        for child in target.children:
+            if child.is_named:
+                result = self._visit_expression(child, ctx)
+                if result is not None:
+                    last_id = result
+        return last_id
 
     def _visit_call(
         self,
@@ -383,6 +476,12 @@ class JavaVisitor(TreeSitterVisitor):
             ctx.current_scope, args=arg_texts,
         )
         self._wire_args(arg_ids, arg_is_var, call_id, ctx)
+        # Wire receiver object into call so that e.g. `queryParams.get()`
+        # carries taint from `queryParams` through to the call result.
+        if obj_node is not None:
+            receiver_id = self._visit_expression(obj_node, ctx)
+            if receiver_id is not None:
+                ctx.emitter.emit_data_flow(receiver_id, call_id)
         return call_id
 
     def _visit_object_creation(

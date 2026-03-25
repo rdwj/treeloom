@@ -286,6 +286,225 @@ class Printer {
         assert any(src_name == "msg" for src_name, _ in pairs)
 
 
+class TestStringConcatDFG:
+    """Verify that string concatenation (`+`) propagates data flow."""
+
+    def test_string_concat_emits_concat_call(self) -> None:
+        src = b"""
+class Foo {
+    void test(String userInput) {
+        String sql = "SELECT * FROM t WHERE id=" + userInput;
+    }
+}
+"""
+        cpg = CPGBuilder().add_source(src, "Foo.java", "java").build()
+        call_names = _names(cpg, NodeKind.CALL)
+        assert "<string_concat>" in call_names
+
+    def test_string_concat_flows_from_variable(self) -> None:
+        """Variable used in string concat must produce a DFG edge."""
+        src = b"""
+class Foo {
+    void test(String userInput) {
+        String sql = "SELECT * FROM t WHERE id=" + userInput;
+    }
+}
+"""
+        cpg = CPGBuilder().add_source(src, "Foo.java", "java").build()
+        pairs = _edge_pairs(cpg, EdgeKind.DATA_FLOWS_TO)
+        # userInput -> <string_concat>
+        assert any(s == "userInput" and "concat" in t for s, t in pairs), (
+            f"expected userInput -> <string_concat>, got: {pairs}"
+        )
+
+    def test_string_concat_flows_to_sink(self) -> None:
+        """Full chain: param -> concat -> query call."""
+        src = b"""
+class Foo {
+    void test(String id) {
+        jdbcTemplate.query("SELECT * WHERE id=" + id);
+    }
+}
+"""
+        cpg = CPGBuilder().add_source(src, "Foo.java", "java").build()
+        pairs = _edge_pairs(cpg, EdgeKind.DATA_FLOWS_TO)
+        # id -> <string_concat>
+        assert any(s == "id" and "concat" in t for s, t in pairs), (
+            f"expected id -> <string_concat>, got: {pairs}"
+        )
+        # <string_concat> -> jdbcTemplate.query
+        assert any("concat" in s and "query" in t for s, t in pairs), (
+            f"expected <string_concat> -> query call, got: {pairs}"
+        )
+
+    def test_method_call_return_flows_through_concat_to_sink(self) -> None:
+        """queryParams.get() -> variable -> concat -> sink: full taint chain."""
+        src = b"""
+class Foo {
+    void test(java.util.Map<String,String> queryParams) {
+        String id = queryParams.get("id");
+        jdbcTemplate.query("SELECT * WHERE id=" + id);
+    }
+}
+"""
+        cpg = CPGBuilder().add_source(src, "Foo.java", "java").build()
+        pairs = _edge_pairs(cpg, EdgeKind.DATA_FLOWS_TO)
+        # queryParams.get -> id
+        assert ("queryParams.get", "id") in pairs, (
+            f"expected queryParams.get -> id, got: {pairs}"
+        )
+        # id -> <string_concat>
+        assert any(s == "id" and "concat" in t for s, t in pairs), (
+            f"expected id -> <string_concat>, got: {pairs}"
+        )
+        # <string_concat> -> sink
+        assert any("concat" in s and "query" in t for s, t in pairs), (
+            f"expected <string_concat> -> query, got: {pairs}"
+        )
+
+
+class TestMethodReceiverDFG:
+    """Verify method call receivers contribute to data flow."""
+
+    def test_receiver_flows_into_call(self) -> None:
+        """obj.method() should emit DFG from obj to the call node."""
+        src = b"""
+class Foo {
+    void test(java.util.Map<String,String> queryParams) {
+        String value = queryParams.get("key");
+    }
+}
+"""
+        cpg = CPGBuilder().add_source(src, "Foo.java", "java").build()
+        pairs = _edge_pairs(cpg, EdgeKind.DATA_FLOWS_TO)
+        # queryParams (param) -> queryParams.get (call)
+        assert ("queryParams", "queryParams.get") in pairs, (
+            f"expected queryParams -> queryParams.get, got: {pairs}"
+        )
+
+    def test_call_return_flows_to_variable(self) -> None:
+        """Return value of call assigned to variable produces DFG edge."""
+        src = b"""
+class Foo {
+    void test(java.util.Map<String,String> params) {
+        String id = params.get("id");
+    }
+}
+"""
+        cpg = CPGBuilder().add_source(src, "Foo.java", "java").build()
+        pairs = _edge_pairs(cpg, EdgeKind.DATA_FLOWS_TO)
+        assert ("params.get", "id") in pairs, (
+            f"expected params.get -> id, got: {pairs}"
+        )
+
+
+class TestTryBlockVisiting:
+    """Statements inside try blocks must be visited."""
+
+    def test_variables_inside_try_are_emitted(self) -> None:
+        src = b"""
+class Foo {
+    void test(String input) {
+        try {
+            String sql = "SELECT * WHERE id=" + input;
+            jdbcTemplate.query(sql);
+        } catch (Exception e) {
+            logger.error("error", e);
+        }
+    }
+}
+"""
+        cpg = CPGBuilder().add_source(src, "Foo.java", "java").build()
+        var_names = _names(cpg, NodeKind.VARIABLE)
+        assert "sql" in var_names, f"expected sql in variables, got: {var_names}"
+
+    def test_calls_inside_try_are_emitted(self) -> None:
+        src = b"""
+class Foo {
+    void test(String input) {
+        try {
+            jdbcTemplate.query(input);
+        } catch (Exception e) {}
+    }
+}
+"""
+        cpg = CPGBuilder().add_source(src, "Foo.java", "java").build()
+        call_names = _names(cpg, NodeKind.CALL)
+        assert any("query" in c for c in call_names), (
+            f"expected query call inside try, got: {call_names}"
+        )
+
+    def test_dfg_preserved_across_try_block(self) -> None:
+        """String concat DFG should work inside a try block."""
+        src = b"""
+class Foo {
+    void test(String input) {
+        try {
+            jdbcTemplate.query("SELECT * WHERE x=" + input);
+        } catch (Exception e) {}
+    }
+}
+"""
+        cpg = CPGBuilder().add_source(src, "Foo.java", "java").build()
+        pairs = _edge_pairs(cpg, EdgeKind.DATA_FLOWS_TO)
+        assert any(s == "input" and "concat" in t for s, t in pairs), (
+            f"expected input -> <string_concat> inside try, got: {pairs}"
+        )
+
+
+class TestConstructorArgDFG:
+    """Constructor args should flow into the constructor call node."""
+
+    def test_constructor_arg_flows_into_call(self) -> None:
+        src = b"""
+class Foo {
+    void test(String cmd) {
+        Process p = new ProcessBuilder(cmd).start();
+    }
+}
+"""
+        cpg = CPGBuilder().add_source(src, "Foo.java", "java").build()
+        pairs = _edge_pairs(cpg, EdgeKind.DATA_FLOWS_TO)
+        # cmd -> new ProcessBuilder
+        assert any(s == "cmd" and "ProcessBuilder" in t for s, t in pairs), (
+            f"expected cmd -> new ProcessBuilder, got: {pairs}"
+        )
+
+    def test_constructor_with_string_concat_arg(self) -> None:
+        src = b"""
+class Foo {
+    void test(String ipAddress) {
+        Process p = new ProcessBuilder(new String[]{"ping -c 2 " + ipAddress}).start();
+    }
+}
+"""
+        cpg = CPGBuilder().add_source(src, "Foo.java", "java").build()
+        pairs = _edge_pairs(cpg, EdgeKind.DATA_FLOWS_TO)
+        # ipAddress -> <string_concat>
+        assert any(s == "ipAddress" and "concat" in t for s, t in pairs), (
+            f"expected ipAddress -> <string_concat>, got: {pairs}"
+        )
+
+
+class TestLambdaBodyVisiting:
+    """Lambda expression bodies should be visited for calls and DFG."""
+
+    def test_call_inside_lambda_is_emitted(self) -> None:
+        src = b"""
+class Foo {
+    void test(java.util.List<String> items) {
+        items.forEach(x -> process(x));
+    }
+    void process(String s) {}
+}
+"""
+        cpg = CPGBuilder().add_source(src, "Foo.java", "java").build()
+        call_names = _names(cpg, NodeKind.CALL)
+        assert any("process" in c for c in call_names), (
+            f"expected process call in lambda body, got: {call_names}"
+        )
+
+
 class TestRegistryIntegration:
     """Verify Java visitor is registered in the default registry."""
 
