@@ -205,6 +205,13 @@ mypy src/treeloom/
 
 ## Changelog
 
+### Version 0.2.5
+
+- Chained attribute receivers (`request.form.attr`) resolve recursively through DFG
+- Basic field sensitivity: `obj.safe` and `obj.unsafe` tracked as separate variables
+- `--output-format` flag on query and edges: table, json, csv, tsv, jsonl
+- 862 tests
+
 ### Version 0.2.4
 
 - Python visitor: subscript (`dict['key']`) and attribute (`obj.attr`) expressions now generate DFG nodes
