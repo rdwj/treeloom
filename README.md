@@ -205,6 +205,13 @@ mypy src/treeloom/
 
 ## Changelog
 
+### Version 0.2.6
+
+- Updated llms.txt and llms-full.txt with complete v0.2.5 API reference
+- All 15 CLI commands documented with flags and usage examples
+- YAML schemas for taint policy, annotation rules, and pattern files
+- Discoverability fixes: exclude_kinds, apply_to, field sensitivity surfaced in Gotchas
+
 ### Version 0.2.5
 
 - Chained attribute receivers (`request.form.attr`) resolve recursively through DFG
