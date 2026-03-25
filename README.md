@@ -205,6 +205,15 @@ mypy src/treeloom/
 
 ## Changelog
 
+### Version 0.2.2
+
+- Fixed data flow tracking through string formatting (.format(), % operator, f-strings)
+- Fixed parameter references not generating data flow edges (root cause of taint false negatives)
+- Implemented CFG edge generation (flows_to, branches_to) connecting statements within functions
+- Implemented inter-procedural data flow: call-site arguments flow to callee parameters, return values flow back
+- Taint analysis on vulpy (deliberately vulnerable Flask app) went from 0 to 12 findings including cross-file HTTP-input-to-SQL-injection traces
+- 776 tests
+
 ### Version 0.2.1
 
 - New CLI commands: `annotate`, `diff`, `pattern`, `subgraph`, `watch`, `serve`, `completions`
