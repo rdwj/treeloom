@@ -543,9 +543,6 @@ class TestStringFormattingDataFlow:
 
     def test_percent_tuple_both_args_flow(self, cpg):
         """% with a tuple RHS should wire both tuple elements."""
-        # Find the % call in percent_tuple function
-        pct_calls = [n for n in cpg.nodes(kind=NodeKind.CALL) if n.name == "%"]
-        # Filter to the one with two arguments (from percent_tuple function)
         pairs = _edge_pairs(cpg, EdgeKind.DATA_FLOWS_TO)
         # Both username and password should flow to some % call
         user_to_pct = [(s, t) for s, t in pairs if s == "username" and t == "%"]
@@ -595,4 +592,85 @@ def identity(x):
         assert ("x", "return") in pairs, (
             f"Expected parameter 'x' to flow to return, "
             f"got DATA_FLOWS_TO pairs: {pairs}"
+        )
+
+
+class TestChainedMethodCalls:
+    """Data flow through chained method calls such as obj.method1().method2()."""
+
+    def test_format_fetchone_chain(self):
+        """Data flows through .format().fetchone(): username -> format -> execute -> fetchone."""
+        source = b"""
+def query(username):
+    result = c.execute("SELECT * WHERE u='{}'".format(username)).fetchone()
+    return result
+"""
+        cpg = CPGBuilder().add_source(source, "chain_fetch.py").build()
+        calls = {n.name for n in cpg.nodes(kind=NodeKind.CALL)}
+        pairs = _edge_pairs(cpg, EdgeKind.DATA_FLOWS_TO)
+
+        # All three call nodes must exist
+        format_calls = [n for n in cpg.nodes(kind=NodeKind.CALL) if "format" in n.name]
+        execute_calls = [n for n in cpg.nodes(kind=NodeKind.CALL) if "execute" in n.name]
+        fetchone_calls = [n for n in cpg.nodes(kind=NodeKind.CALL) if "fetchone" in n.name]
+        assert format_calls, f"Expected a .format() call node, got calls: {calls}"
+        assert execute_calls, f"Expected a .execute() call node, got calls: {calls}"
+        assert fetchone_calls, f"Expected a .fetchone() call node, got calls: {calls}"
+
+        # username flows into .format()
+        fmt_name = format_calls[0].name
+        assert ("username", fmt_name) in pairs, (
+            f"Expected username -> {fmt_name!r}, got pairs: {pairs}"
+        )
+
+        # .format() result flows into .execute()
+        exec_name = execute_calls[0].name
+        assert (fmt_name, exec_name) in pairs, (
+            f"Expected {fmt_name!r} -> {exec_name!r}, got pairs: {pairs}"
+        )
+
+        # .execute() result flows into .fetchone()
+        fetch_name = fetchone_calls[0].name
+        assert (exec_name, fetch_name) in pairs, (
+            f"Expected {exec_name!r} -> {fetch_name!r}, got pairs: {pairs}"
+        )
+
+    def test_triple_chain(self):
+        """Data flows through a three-level chain: transform(data).encode().decode()."""
+        source = b"""
+def process(data):
+    result = transform(data).encode().decode()
+    return result
+"""
+        cpg = CPGBuilder().add_source(source, "triple_chain.py").build()
+        calls = {n.name for n in cpg.nodes(kind=NodeKind.CALL)}
+        pairs = _edge_pairs(cpg, EdgeKind.DATA_FLOWS_TO)
+
+        # All three call nodes must exist
+        transform_calls = [
+            n for n in cpg.nodes(kind=NodeKind.CALL)
+            if "transform" in n.name and "encode" not in n.name
+        ]
+        encode_calls = [n for n in cpg.nodes(kind=NodeKind.CALL) if "encode" in n.name]
+        decode_calls = [n for n in cpg.nodes(kind=NodeKind.CALL) if "decode" in n.name]
+        assert transform_calls, f"Expected a transform() call node, got: {calls}"
+        assert encode_calls, f"Expected an .encode() call node, got: {calls}"
+        assert decode_calls, f"Expected a .decode() call node, got: {calls}"
+
+        # data flows into transform()
+        xform_name = transform_calls[0].name
+        assert ("data", xform_name) in pairs, (
+            f"Expected data -> {xform_name!r}, got pairs: {pairs}"
+        )
+
+        # transform() result flows into .encode()
+        enc_name = encode_calls[0].name
+        assert (xform_name, enc_name) in pairs, (
+            f"Expected {xform_name!r} -> {enc_name!r}, got pairs: {pairs}"
+        )
+
+        # .encode() result flows into .decode()
+        dec_name = decode_calls[0].name
+        assert (enc_name, dec_name) in pairs, (
+            f"Expected {enc_name!r} -> {dec_name!r}, got pairs: {pairs}"
         )

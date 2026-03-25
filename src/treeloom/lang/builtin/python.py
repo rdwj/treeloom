@@ -585,7 +585,37 @@ class PythonVisitor(TreeSitterVisitor):
         if func_node is None:
             return None
 
-        target_name = self._node_text(func_node, ctx.source)
+        # When the function is an attribute access (e.g. `obj.method`), check
+        # whether the receiver object is itself a call (chained method call).
+        # If so, recursively visit the inner call first so we can wire data
+        # flow from it to this (outer) call.  We also use only the method name
+        # portion for the outer call's name rather than the full receiver
+        # expression text, which would be both verbose and misleading.
+        receiver_call_id: NodeId | None = None
+        if func_node.type == "attribute":
+            obj_node = func_node.child_by_field_name("object")
+            attr_node = func_node.child_by_field_name("attribute")
+            if obj_node is not None and obj_node.type == "call":
+                # Recursively visit the inner call before emitting the outer one
+                receiver_call_id = self._visit_expression(obj_node, ctx)
+                # Build a name: <inner_func_name>.<method> so the outer call is
+                # still identifiable (e.g. "c.execute.fetchone").
+                method_name = (
+                    self._node_text(attr_node, ctx.source)
+                    if attr_node is not None
+                    else self._node_text(func_node, ctx.source)
+                )
+                inner_func_name = self._extract_call_name(obj_node)
+                target_name = (
+                    f"{inner_func_name}.{method_name}"
+                    if inner_func_name
+                    else method_name
+                )
+            else:
+                target_name = self._node_text(func_node, ctx.source)
+        else:
+            target_name = self._node_text(func_node, ctx.source)
+
         loc = self._location(node, ctx.file_path)
         scope = ctx.current_scope
 
@@ -603,6 +633,10 @@ class PythonVisitor(TreeSitterVisitor):
 
         call_id = ctx.emitter.emit_call(target_name, loc, scope, args=arg_texts)
 
+        # Wire data flow from the chained receiver call (if any) to this call
+        if receiver_call_id is not None:
+            ctx.emitter.emit_data_flow(receiver_call_id, call_id)
+
         # Wire DATA_FLOWS_TO and USED_BY from argument variable defs to the call
         for i, arg_id in enumerate(arg_ids):
             if arg_id is not None:
@@ -611,6 +645,19 @@ class PythonVisitor(TreeSitterVisitor):
                     ctx.emitter.emit_usage(arg_id, call_id)
 
         return call_id
+
+    def _extract_call_name(self, call_node: tree_sitter.Node) -> str | None:
+        """Extract the function/method name from a call node.
+
+        Returns the text of the ``function`` child node, which is what
+        ``_visit_call_expression`` uses as the call name.  Used to build
+        composite names for chained calls without needing to look up already-
+        emitted nodes.
+        """
+        func = call_node.child_by_field_name("function")
+        if func is None:
+            return None
+        return func.text.decode("utf-8", errors="replace") if func.text else None
 
 
 # -- Visit context (mutable state carried through the walk) -------------------
