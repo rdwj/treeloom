@@ -77,7 +77,7 @@ class CPGBuilder:
         Pipeline stages:
         1. Parse: select visitor by extension, parse source
         2. Visit: visitor walks parse tree, emits nodes/edges via emitter
-        3. CFG: construct control flow edges (future)
+        3. CFG: construct intra-procedural control flow edges
         4. Call resolution: link call sites to definitions
         5. Inter-procedural DFG: propagate data flow across calls (Phase 3)
         """
@@ -91,9 +91,15 @@ class CPGBuilder:
         for source_bytes, filename, language in self._sources:
             self._process_source(source_bytes, filename, language, registry)
 
+        # Phase 3: CFG — connect statements within each function
+        self._build_cfg()
+
         # Call resolution: let each visitor link CALL nodes to FUNCTION defs
         if registry is not None:
             self._resolve_calls(registry)
+
+        # Phase 5: Inter-procedural DFG — propagate data flow across calls
+        self._build_interprocedural_dfg()
 
         # Clear tree-sitter node references now that build is complete
         for cpg_node in self._cpg._nodes.values():
@@ -359,6 +365,159 @@ class CPGBuilder:
         self._cpg.add_edge(CpgEdge(
             source=parent, target=child, kind=EdgeKind.CONTAINS
         ))
+
+    def _build_cfg(self) -> None:
+        """Build intra-procedural control flow edges for each function.
+
+        For every FUNCTION node, sorts its direct children by source location
+        and connects them with FLOWS_TO edges (sequential flow) and BRANCHES_TO
+        edges (branch/loop entry). RETURN nodes have no outgoing FLOWS_TO. LOOP
+        nodes get a back-edge from the last body statement.
+        """
+        for func in self._cpg.nodes(kind=NodeKind.FUNCTION):
+            children = self._cpg.children_of(func.id)
+            if not children:
+                continue
+
+            # Sort by source location (line, then column); skip locationless nodes
+            located = [
+                (c, c.location) for c in children if c.location is not None
+            ]
+            located.sort(key=lambda x: (x[1].line, x[1].column))
+            sorted_children = [c for c, _ in located]
+
+            # Sequential FLOWS_TO between adjacent children
+            for i in range(len(sorted_children) - 1):
+                current = sorted_children[i]
+                next_node = sorted_children[i + 1]
+
+                # RETURN terminates flow — no outgoing FLOWS_TO
+                if current.kind == NodeKind.RETURN:
+                    continue
+
+                self._cpg.add_edge(CpgEdge(
+                    source=current.id,
+                    target=next_node.id,
+                    kind=EdgeKind.FLOWS_TO,
+                ))
+
+            # BRANCHES_TO from BRANCH/LOOP nodes into their bodies,
+            # and back-edges for loops
+            for child in sorted_children:
+                if child.kind not in (NodeKind.BRANCH, NodeKind.LOOP):
+                    continue
+
+                body_children = self._cpg.children_of(child.id)
+                if not body_children:
+                    continue
+
+                bc_located = [
+                    (bc, bc.location)
+                    for bc in body_children
+                    if bc.location is not None
+                ]
+                bc_located.sort(key=lambda x: (x[1].line, x[1].column))
+                if not bc_located:
+                    continue
+
+                # Entry edge into the body
+                first_body = bc_located[0][0]
+                self._cpg.add_edge(CpgEdge(
+                    source=child.id,
+                    target=first_body.id,
+                    kind=EdgeKind.BRANCHES_TO,
+                ))
+
+                # Loop back-edge: last body statement -> loop header
+                if child.kind == NodeKind.LOOP:
+                    last_body = bc_located[-1][0]
+                    if last_body.kind != NodeKind.RETURN:
+                        self._cpg.add_edge(CpgEdge(
+                            source=last_body.id,
+                            target=child.id,
+                            kind=EdgeKind.FLOWS_TO,
+                        ))
+
+    def _build_interprocedural_dfg(self) -> None:
+        """Create DATA_FLOWS_TO edges across call boundaries.
+
+        For each CALLS edge (call_site -> function_def):
+        1. Match argument sources at the call site to callee parameters by
+           position, creating DATA_FLOWS_TO edges from each argument to the
+           corresponding parameter.
+        2. Wire return values back: if the callee has RETURN nodes with
+           incoming data flow, connect those sources to the call node so the
+           return value propagates to the caller.
+
+        Argument-to-parameter matching is position-based, using source
+        location to order the argument nodes. This is a v1 simplification;
+        keyword arguments and receiver objects (self) are not handled.
+        """
+        from treeloom.analysis.summary import compute_summaries
+
+        summaries = compute_summaries(self._cpg)
+
+        for edge in list(self._cpg.edges(kind=EdgeKind.CALLS)):
+            call_node = self._cpg.node(edge.source)
+            func_node = self._cpg.node(edge.target)
+            if call_node is None or func_node is None:
+                continue
+
+            # Get the callee's parameters sorted by position
+            params = [
+                n
+                for n in self._cpg.successors(
+                    func_node.id, edge_kind=EdgeKind.HAS_PARAMETER
+                )
+                if n.kind == NodeKind.PARAMETER
+            ]
+            params.sort(key=lambda p: p.attrs.get("position", 0))
+
+            # Get nodes whose data flows into this call (the arguments).
+            # Sort by source location so positional matching works.
+            arg_sources = self._cpg.predecessors(
+                call_node.id, edge_kind=EdgeKind.DATA_FLOWS_TO
+            )
+            arg_sources.sort(
+                key=lambda n: (
+                    n.location.line if n.location else 0,
+                    n.location.column if n.location else 0,
+                )
+            )
+
+            # Match arguments to parameters by position
+            for i, param in enumerate(params):
+                if i < len(arg_sources):
+                    self._cpg.add_edge(
+                        CpgEdge(
+                            source=arg_sources[i].id,
+                            target=param.id,
+                            kind=EdgeKind.DATA_FLOWS_TO,
+                        )
+                    )
+
+            # Wire return values back to the call site.
+            # If the function summary shows any parameter flows to return,
+            # find RETURN nodes and connect their incoming data to the call.
+            summary = summaries.get(func_node.id)
+            if summary and summary.params_to_return:
+                return_nodes = [
+                    n
+                    for n in self._cpg.children_of(func_node.id)
+                    if n.kind == NodeKind.RETURN
+                ]
+                for ret in return_nodes:
+                    ret_sources = self._cpg.predecessors(
+                        ret.id, edge_kind=EdgeKind.DATA_FLOWS_TO
+                    )
+                    for src in ret_sources:
+                        self._cpg.add_edge(
+                            CpgEdge(
+                                source=src.id,
+                                target=call_node.id,
+                                kind=EdgeKind.DATA_FLOWS_TO,
+                            )
+                        )
 
     def _resolve_calls(self, registry: Any) -> None:
         """Run call resolution for all registered visitors."""

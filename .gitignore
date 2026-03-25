@@ -13,3 +13,4 @@ venv/
 .ruff_cache/
 htmlcov/
 .coverage
+test-output/

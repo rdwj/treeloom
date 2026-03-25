@@ -879,6 +879,11 @@ The version lives in two files that must stay in sync:
 - `pyproject.toml` — `version = "x.y.z"`
 
 
+## Working Rules
+
+- **Track work as issues.** When you encounter a bug, gap, or improvement opportunity that you don't immediately fix, create a GitHub issue for it (`gh issue create --repo rdwj/treeloom`). Check for existing issues first to avoid duplicates. Label with appropriate priority (priority-high/medium/low) and category (bug, enhancement, engine, cli). Add to project board 5.
+
+
 ## Don't Forget
 
 - tree-sitter grammar packages are optional dependencies (in the `[languages]` extra). The core library works without them — you just can't parse files without the appropriate grammar installed.
