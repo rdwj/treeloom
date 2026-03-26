@@ -205,6 +205,13 @@ mypy src/treeloom/
 
 ## Changelog
 
+### Version 0.2.7
+
+- Diff defaults to basename matching for cross-directory comparisons (e.g., bad/ vs good/)
+- Added `--count` flag to edges command for parity with query
+- Documented taint sink-only reporting in llms.txt (engine only reports paths terminating at declared sinks)
+- 867 tests
+
 ### Version 0.2.6
 
 - Updated llms.txt and llms-full.txt with complete v0.2.5 API reference
