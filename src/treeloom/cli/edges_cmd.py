@@ -49,6 +49,10 @@ def register(subparsers: argparse._SubParsersAction) -> None:  # type: ignore[ty
         "--limit", "-l", type=int, default=_DEFAULT_LIMIT,
         help=f"Max results (default {_DEFAULT_LIMIT})",
     )
+    p.add_argument(
+        "--count", "-c", action="store_true",
+        help="Print only the matching edge count and exit",
+    )
     p.set_defaults(func=run_cmd)
 
 
@@ -92,6 +96,7 @@ def run_cmd(args: argparse.Namespace, _cfg: Config | None = None) -> int:
             return 1
 
     limit: int = args.limit
+    count_only: bool = getattr(args, "count", False)
 
     results = []
     for edge in cpg.edges():
@@ -106,8 +111,13 @@ def run_cmd(args: argparse.Namespace, _cfg: Config | None = None) -> int:
         if target_re is not None and not target_re.search(tgt_node.name):
             continue
         results.append((edge, src_node, tgt_node))
-        if len(results) >= limit:
+        # Don't apply the limit when counting — we need the full result set.
+        if not count_only and len(results) >= limit:
             break
+
+    if count_only:
+        print(len(results))
+        return 0
 
     # --json is a legacy alias for --output-format json
     fmt: str = "json" if args.as_json else getattr(args, "output_format", "table")

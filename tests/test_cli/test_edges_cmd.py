@@ -39,6 +39,7 @@ def _make_args(cpg_file: Path, **overrides: object) -> argparse.Namespace:
         "as_json": False,
         "output_format": "table",
         "limit": 50,
+        "count": False,
     }
     defaults.update(overrides)
     return argparse.Namespace(**defaults)
@@ -159,6 +160,51 @@ class TestEdgesCommand:
         assert rc == 0
         out = capsys.readouterr().out
         assert "No matching" in out
+
+
+class TestEdgesCount:
+    """Tests for --count flag on the edges command."""
+
+    def test_count_all_edges(
+        self, cpg_file: Path, cfg: Config, capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        args = _make_args(cpg_file, count=True)
+        rc = run_cmd(args, cfg)
+        assert rc == 0
+        out = capsys.readouterr().out.strip()
+        assert out.isdigit(), f"Expected a plain integer, got: {out!r}"
+        assert int(out) > 0
+
+    def test_count_with_kind_filter(
+        self, cpg_file: Path, cfg: Config, capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        # Count with filter should be <= total count
+        args_all = _make_args(cpg_file, count=True)
+        run_cmd(args_all, cfg)
+        total = int(capsys.readouterr().out.strip())
+
+        args_filtered = _make_args(cpg_file, count=True, kind=["contains"])
+        rc = run_cmd(args_filtered, cfg)
+        assert rc == 0
+        filtered = int(capsys.readouterr().out.strip())
+        assert filtered <= total
+
+    def test_count_ignores_limit(
+        self, cpg_file: Path, cfg: Config, capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        # --count should return the true total, not capped at --limit
+        args_count = _make_args(cpg_file, count=True)
+        run_cmd(args_count, cfg)
+        full_count = int(capsys.readouterr().out.strip())
+
+        args_limited = _make_args(cpg_file, count=True, limit=1)
+        run_cmd(args_limited, cfg)
+        count_with_limit = int(capsys.readouterr().out.strip())
+
+        assert count_with_limit == full_count, (
+            f"--count should ignore --limit: got {count_with_limit} with limit=1, "
+            f"expected {full_count}"
+        )
 
 
 class TestEdgesOutputFormat:

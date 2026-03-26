@@ -68,7 +68,8 @@ def run_cmd(args: argparse.Namespace, _cfg: Config | None = None) -> int:
     after = load_cpg(after_path)
 
     strip_prefix: str | None = getattr(args, "strip_prefix", None)
-    match_by_basename: bool = getattr(args, "match_by_basename", False)
+    # Default is True (basename matching); --match-by-full-path sets it False.
+    match_by_basename: bool = getattr(args, "match_by_basename", True)
 
     # Build file sets (with optional normalization)
     def _norm(f: object) -> str:
@@ -193,9 +194,17 @@ def register(subparsers: argparse._SubParsersAction) -> None:  # type: ignore[ty
         help="Strip this prefix from all file paths before comparison",
     )
     p.add_argument(
+        "--match-by-full-path",
+        dest="match_by_basename",
+        action="store_false",
+        default=True,
+        help="Compare files by full path (default is basename-only matching)",
+    )
+    # Kept for backward compatibility; basename matching is now the default.
+    p.add_argument(
         "--match-by-basename",
+        dest="match_by_basename",
         action="store_true",
-        default=False,
-        help="Compare files by basename only, ignoring directory",
+        help=argparse.SUPPRESS,
     )
     p.set_defaults(func=run_cmd)

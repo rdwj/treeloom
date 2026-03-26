@@ -69,6 +69,8 @@ All operations are available from the `treeloom` command:
 - **Decorators captured**: Decorator names are stored in `function_node.attrs["decorators"]` (list of strings, e.g. `["app.route"]`).
 - **Import noise in visualization**: Import nodes often dominate the graph (50%+ of nodes). Use `generate_html(cpg, exclude_kinds=frozenset({NodeKind.IMPORT}))` to omit them entirely, or use the default layers which put imports in a togglable layer that's off by default. CLI: `treeloom viz cpg.json --exclude-kind import`.
 - **Taint annotations on the graph**: After `result = cpg.taint(policy)`, call `result.apply_to(cpg)` to stamp taint status onto graph nodes/edges as annotations. Then subgraph extraction, serialization, and node inspection all carry taint info. CLI: `treeloom taint cpg.json --policy p.yaml --apply -o annotated.json`.
+- **Diff defaults to basename matching**: `treeloom diff` matches files by basename, so `bad/libuser.py` and `good/libuser.py` compare correctly. Use `--match-by-full-path` for exact path comparison.
+- **Only declared sinks appear in TaintResult.paths**: The engine records a `TaintPath` only when taint reaches a node for which `policy.sinks(node)` returns True. Taint that propagates through intermediate nodes (e.g., assignments, function returns) does NOT produce a path entry. If you see unexpected functions like `print()` or `jsonify()` in results, your `sinks` callback is returning True for those nodes — narrow it. The engine itself is not at fault.
 - **Grammar packages are optional**: Core library works without them. Install `treeloom[languages]` for all grammars, or individual packages like `tree-sitter-python`.
 
 ## Optional

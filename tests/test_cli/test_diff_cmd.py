@@ -218,6 +218,66 @@ class TestDiffPathOptions:
         assert "New functions" not in out
         assert "Removed functions" not in out
 
+    def test_basename_is_default(
+        self, tmp_path: Path, cfg: Config, capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        # Copy the same source to two separate dirs so the absolute paths differ.
+        # Without any flag (basename matching is the default), functions should match
+        # by basename and no diff appears.
+        import shutil
+        src = FIXTURES / "simple_function.py"
+        dir_a = tmp_path / "dir_a"
+        dir_b = tmp_path / "dir_b"
+        dir_a.mkdir()
+        dir_b.mkdir()
+        shutil.copy(src, dir_a / "simple_function.py")
+        shutil.copy(src, dir_b / "simple_function.py")
+        cpg_a = _build_cpg(dir_a / "simple_function.py", dir_a / "cpg.json", cfg)
+        cpg_b = _build_cpg(dir_b / "simple_function.py", dir_b / "cpg.json", cfg)
+
+        # No match_by_basename in Namespace — run_cmd defaults to True
+        args = argparse.Namespace(
+            before=cpg_a,
+            after=cpg_b,
+            as_json=False,
+        )
+        rc = run_cmd(args, cfg)
+        assert rc == 0
+        out = capsys.readouterr().out
+        assert "New functions" not in out
+        assert "Removed functions" not in out
+
+    def test_match_by_full_path_distinguishes_dirs(
+        self, tmp_path: Path, cfg: Config, capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        # With full-path matching, files in different dirs look like different files.
+        # Copy the same source to two separate directories so the absolute paths differ.
+        import shutil
+        src = FIXTURES / "simple_function.py"
+        dir_a = tmp_path / "dir_a"
+        dir_b = tmp_path / "dir_b"
+        dir_a.mkdir()
+        dir_b.mkdir()
+        src_a = dir_a / "simple_function.py"
+        src_b = dir_b / "simple_function.py"
+        shutil.copy(src, src_a)
+        shutil.copy(src, src_b)
+        cpg_a = _build_cpg(src_a, dir_a / "cpg.json", cfg)
+        cpg_b = _build_cpg(src_b, dir_b / "cpg.json", cfg)
+
+        args = argparse.Namespace(
+            before=cpg_a,
+            after=cpg_b,
+            as_json=True,
+            strip_prefix=None,
+            match_by_basename=False,  # --match-by-full-path
+        )
+        rc = run_cmd(args, cfg)
+        assert rc == 0
+        data = json.loads(capsys.readouterr().out)
+        # Different full paths => treated as new/removed files
+        assert len(data["new_files"]) > 0 or len(data["removed_files"]) > 0
+
     def test_strip_prefix_json(
         self,
         before_cpg: Path,
