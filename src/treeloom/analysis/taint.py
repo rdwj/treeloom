@@ -43,6 +43,9 @@ class TaintPropagator:
     match: Callable[[CpgNode], bool]
     param_to_return: bool = True
     param_to_param: dict[int, int] | None = None
+    # Specific param positions that flow to the return value.
+    # Takes precedence over param_to_return when set.
+    params_to_return: list[int] | None = None
 
 
 @dataclass
@@ -314,6 +317,25 @@ def run_taint(cpg: CodePropertyGraph, policy: TaintPolicy) -> TaintResult:
                             var_id_str = str(edge.source)
                             if var_id_str not in targets:
                                 targets.append(var_id_str)
+
+        # Propagator-based: library calls without a resolved callee
+        if current_node.kind == NodeKind.CALL and not calls_fwd.get(current_id):
+            for propagator in policy.propagators:
+                if propagator.match(current_node):
+                    # Check if taint should flow to return value
+                    should_propagate = False
+                    if propagator.params_to_return is not None:
+                        should_propagate = len(propagator.params_to_return) > 0
+                    elif propagator.param_to_return:
+                        should_propagate = True
+
+                    if should_propagate:
+                        for edge in cpg.edges(kind=EdgeKind.DEFINED_BY):
+                            if str(edge.target) == current_id:
+                                var_id_str = str(edge.source)
+                                if var_id_str not in targets:
+                                    targets.append(var_id_str)
+                    break  # First matching propagator wins
 
         for target_id in targets:
             target_labels = labels_at.get(target_id, frozenset())

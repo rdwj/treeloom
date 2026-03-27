@@ -1,0 +1,118 @@
+# Python standard library — data flow propagation models.
+#
+# Describes how data flows through stdlib functions. NOT source/sink
+# classification (that is consumer-level policy).
+
+schema_version: 1
+
+functions:
+  # -- json ---------------------------------------------------------------
+  - name: json.loads
+    aliases: ["loads"]
+    propagation:
+      params_to_return: [0]
+  - name: json.dumps
+    aliases: ["dumps"]
+    propagation:
+      params_to_return: [0]
+  - name: json.load
+    aliases: ["load"]
+    propagation:
+      params_to_return: [0]
+  - name: json.dump
+    aliases: ["dump"]
+    propagation:
+      params_to_return: [0]
+
+  # -- pickle -------------------------------------------------------------
+  - name: pickle.loads
+    propagation:
+      params_to_return: [0]
+  - name: pickle.dumps
+    propagation:
+      params_to_return: [0]
+  - name: pickle.load
+    propagation:
+      params_to_return: [0]
+  - name: pickle.dump
+    propagation:
+      params_to_return: [0]
+
+  # -- os.path ------------------------------------------------------------
+  - name: os.path.join
+    aliases: ["join"]
+    propagation:
+      params_to_return: [0, 1]
+  - name: os.path.abspath
+    aliases: ["abspath"]
+    propagation:
+      params_to_return: [0]
+  - name: os.path.basename
+    aliases: ["basename"]
+    propagation:
+      params_to_return: [0]
+  - name: os.path.dirname
+    aliases: ["dirname"]
+    propagation:
+      params_to_return: [0]
+  - name: os.path.normpath
+    aliases: ["normpath"]
+    propagation:
+      params_to_return: [0]
+
+  # -- shlex --------------------------------------------------------------
+  - name: shlex.split
+    propagation:
+      params_to_return: [0]
+  - name: shlex.quote
+    propagation:
+      params_to_return: [0]
+
+  # -- subprocess ---------------------------------------------------------
+  - name: subprocess.run
+    propagation:
+      params_to_return: [0]
+  - name: subprocess.call
+    propagation:
+      params_to_return: [0]
+  - name: subprocess.check_output
+    propagation:
+      params_to_return: [0]
+  - name: subprocess.Popen
+    propagation:
+      params_to_return: [0]
+
+  # -- urllib.parse -------------------------------------------------------
+  - name: urllib.parse.urljoin
+    aliases: ["urljoin"]
+    propagation:
+      params_to_return: [0, 1]
+  - name: urllib.parse.quote
+    propagation:
+      params_to_return: [0]
+  - name: urllib.parse.unquote
+    aliases: ["unquote"]
+    propagation:
+      params_to_return: [0]
+  - name: urllib.parse.urlencode
+    aliases: ["urlencode"]
+    propagation:
+      params_to_return: [0]
+
+  # -- base64 -------------------------------------------------------------
+  - name: base64.b64encode
+    aliases: ["b64encode"]
+    propagation:
+      params_to_return: [0]
+  - name: base64.b64decode
+    aliases: ["b64decode"]
+    propagation:
+      params_to_return: [0]
+  - name: base64.urlsafe_b64encode
+    aliases: ["urlsafe_b64encode"]
+    propagation:
+      params_to_return: [0]
+  - name: base64.urlsafe_b64decode
+    aliases: ["urlsafe_b64decode"]
+    propagation:
+      params_to_return: [0]

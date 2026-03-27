@@ -1,0 +1,91 @@
+# Python built-in functions and common method data flow models.
+#
+# Covers built-in functions (no module prefix) and common string/dict/list
+# methods that the visitor may emit as "method_name" or "type.method_name".
+
+schema_version: 1
+
+functions:
+  # -- Built-in type constructors -----------------------------------------
+  - name: str
+    propagation:
+      params_to_return: [0]
+  - name: repr
+    propagation:
+      params_to_return: [0]
+  - name: bytes
+    propagation:
+      params_to_return: [0]
+  - name: list
+    propagation:
+      params_to_return: [0]
+  - name: tuple
+    propagation:
+      params_to_return: [0]
+  - name: dict
+    propagation:
+      params_to_return: [0]
+  - name: set
+    propagation:
+      params_to_return: [0]
+  - name: sorted
+    propagation:
+      params_to_return: [0]
+  - name: reversed
+    propagation:
+      params_to_return: [0]
+  - name: enumerate
+    propagation:
+      params_to_return: [0]
+
+  # -- String methods -----------------------------------------------------
+  - name: format
+    aliases: ["str.format"]
+    propagation:
+      params_to_return: [0]
+  - name: join
+    aliases: ["str.join"]
+    propagation:
+      params_to_return: [0]
+  - name: replace
+    aliases: ["str.replace"]
+    propagation:
+      params_to_return: [0]
+  - name: strip
+    aliases: ["str.strip"]
+    propagation:
+      params_to_return: [0]
+  - name: lstrip
+    aliases: ["str.lstrip"]
+    propagation:
+      params_to_return: [0]
+  - name: rstrip
+    aliases: ["str.rstrip"]
+    propagation:
+      params_to_return: [0]
+  - name: lower
+    aliases: ["str.lower"]
+    propagation:
+      params_to_return: [0]
+  - name: upper
+    aliases: ["str.upper"]
+    propagation:
+      params_to_return: [0]
+  - name: encode
+    aliases: ["str.encode"]
+    propagation:
+      params_to_return: [0]
+  - name: decode
+    aliases: ["bytes.decode"]
+    propagation:
+      params_to_return: [0]
+  - name: split
+    aliases: ["str.split"]
+    propagation:
+      params_to_return: [0]
+
+  # -- Dict methods -------------------------------------------------------
+  - name: get
+    aliases: ["dict.get"]
+    propagation:
+      params_to_return: [0]

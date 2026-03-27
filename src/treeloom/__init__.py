@@ -22,6 +22,7 @@ from treeloom.graph.cpg import CodePropertyGraph
 from treeloom.model.edges import CpgEdge, EdgeKind
 from treeloom.model.location import SourceLocation, SourceRange
 from treeloom.model.nodes import CpgNode, NodeId, NodeKind
+from treeloom.models import list_builtin_models, load_model_file, load_models
 from treeloom.overlay.api import Overlay, OverlayStyle, VisualizationLayer
 from treeloom.query.api import GraphQuery
 from treeloom.query.pattern import ChainPattern, StepMatcher
@@ -57,4 +58,7 @@ __all__ = [
     "TaintPolicy",
     "TaintPropagator",
     "TaintResult",
+    "list_builtin_models",
+    "load_model_file",
+    "load_models",
 ]

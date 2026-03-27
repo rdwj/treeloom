@@ -9,6 +9,7 @@ import pytest
 from treeloom.analysis.taint import (
     TaintLabel,
     TaintPolicy,
+    TaintPropagator,
     TaintResult,
     run_taint,
 )
@@ -959,3 +960,187 @@ class TestInterProceduralIntegration:
         assert result.labels_at(sql_param.id), (
             "Expected 'sql' parameter to carry taint labels"
         )
+
+
+# ---------------------------------------------------------------------------
+# TaintPropagator — library call modeling
+# ---------------------------------------------------------------------------
+
+class TestPropagator:
+    """Tests for TaintPropagator-based library call modeling."""
+
+    def test_propagator_fires_for_unresolved_call(self):
+        """Taint flows through a library call when a propagator matches."""
+        cpg = CodePropertyGraph()
+        cpg.add_node(make_node(NodeKind.VARIABLE, "src", "s1", line=1))
+        cpg.add_node(make_node(NodeKind.CALL, "json.loads", "call1", line=2))
+        cpg.add_node(make_node(NodeKind.VARIABLE, "result", "v1", line=2))
+        cpg.add_node(make_node(NodeKind.CALL, "sink", "k1", line=3))
+
+        add_edge(cpg, "s1", "call1", EdgeKind.DATA_FLOWS_TO)
+        add_edge(cpg, "v1", "call1", EdgeKind.DEFINED_BY)
+        add_edge(cpg, "call1", "v1", EdgeKind.DATA_FLOWS_TO)
+        add_edge(cpg, "v1", "k1", EdgeKind.DATA_FLOWS_TO)
+        # No CALLS edge — json.loads is a library call
+
+        propagator = TaintPropagator(
+            match=lambda n: n.name == "json.loads",
+            params_to_return=[0],
+        )
+        policy = TaintPolicy(
+            sources=lambda n: TaintLabel(name="taint", origin=n.id) if str(n.id) == "s1" else None,
+            sinks=lambda n: str(n.id) == "k1",
+            sanitizers=lambda n: False,
+            propagators=[propagator],
+        )
+        result = run_taint(cpg, policy)
+
+        assert len(result.paths) == 1
+        assert str(result.paths[0].sink.id) == "k1"
+
+    def test_propagator_does_not_fire_when_no_match(self):
+        """No propagation when the propagator doesn't match the call."""
+        cpg = CodePropertyGraph()
+        cpg.add_node(make_node(NodeKind.VARIABLE, "src", "s1", line=1))
+        cpg.add_node(make_node(NodeKind.CALL, "unrelated.func", "call1", line=2))
+        cpg.add_node(make_node(NodeKind.VARIABLE, "result", "v1", line=2))
+        cpg.add_node(make_node(NodeKind.CALL, "sink", "k1", line=3))
+
+        add_edge(cpg, "s1", "call1", EdgeKind.DATA_FLOWS_TO)
+        add_edge(cpg, "v1", "call1", EdgeKind.DEFINED_BY)
+        # No direct DATA_FLOWS_TO from call1 to v1
+        add_edge(cpg, "v1", "k1", EdgeKind.DATA_FLOWS_TO)
+
+        propagator = TaintPropagator(
+            match=lambda n: n.name == "json.loads",  # Won't match "unrelated.func"
+            params_to_return=[0],
+        )
+        policy = TaintPolicy(
+            sources=lambda n: TaintLabel(name="taint", origin=n.id) if str(n.id) == "s1" else None,
+            sinks=lambda n: str(n.id) == "k1",
+            sanitizers=lambda n: False,
+            propagators=[propagator],
+        )
+        result = run_taint(cpg, policy)
+
+        assert len(result.paths) == 0
+
+    def test_propagator_skipped_when_callee_resolved(self):
+        """Propagator doesn't fire when the call has a resolved callee."""
+        cpg = CodePropertyGraph()
+        # A function that happens to match the propagator
+        cpg.add_node(make_node(NodeKind.FUNCTION, "transform", "fn1", line=1))
+        cpg.add_node(make_node(NodeKind.PARAMETER, "x", "p1", scope="fn1", line=1, position=0))
+        cpg.add_node(make_node(NodeKind.RETURN, "return", "ret1", scope="fn1", line=2))
+        add_edge(cpg, "fn1", "p1", EdgeKind.HAS_PARAMETER)
+        add_edge(cpg, "p1", "ret1", EdgeKind.DATA_FLOWS_TO)
+
+        cpg.add_node(make_node(NodeKind.VARIABLE, "src", "s1", line=5))
+        cpg.add_node(make_node(NodeKind.CALL, "transform", "call1", line=6))
+        cpg.add_node(make_node(NodeKind.VARIABLE, "result", "v1", line=6))
+        cpg.add_node(make_node(NodeKind.CALL, "sink", "k1", line=7))
+
+        add_edge(cpg, "s1", "call1", EdgeKind.DATA_FLOWS_TO)
+        add_edge(cpg, "call1", "fn1", EdgeKind.CALLS)  # Has a resolved callee
+        add_edge(cpg, "v1", "call1", EdgeKind.DEFINED_BY)
+        add_edge(cpg, "call1", "v1", EdgeKind.DATA_FLOWS_TO)
+        add_edge(cpg, "v1", "k1", EdgeKind.DATA_FLOWS_TO)
+
+        # Propagator matches but should NOT fire because callee is resolved
+        propagator = TaintPropagator(
+            match=lambda n: n.name == "transform",
+            param_to_return=False,  # Would block propagation if it fired
+        )
+        policy = TaintPolicy(
+            sources=lambda n: TaintLabel(name="taint", origin=n.id) if str(n.id) == "s1" else None,
+            sinks=lambda n: str(n.id) == "k1",
+            sanitizers=lambda n: False,
+            propagators=[propagator],
+        )
+        result = run_taint(cpg, policy)
+
+        # Should still find the path via the summary, not the propagator
+        assert len(result.paths) == 1
+        assert str(result.paths[0].sink.id) == "k1"
+
+    def test_propagator_with_defined_by_fallback_only(self):
+        """Propagator works even without DATA_FLOWS_TO from call to result."""
+        cpg = CodePropertyGraph()
+        cpg.add_node(make_node(NodeKind.VARIABLE, "src", "s1", line=1))
+        cpg.add_node(make_node(NodeKind.CALL, "json.loads", "call1", line=2))
+        cpg.add_node(make_node(NodeKind.VARIABLE, "result", "v1", line=2))
+        cpg.add_node(make_node(NodeKind.CALL, "sink", "k1", line=3))
+
+        add_edge(cpg, "s1", "call1", EdgeKind.DATA_FLOWS_TO)
+        add_edge(cpg, "v1", "call1", EdgeKind.DEFINED_BY)
+        # No DATA_FLOWS_TO from call1 to v1 — only DEFINED_BY
+        add_edge(cpg, "v1", "k1", EdgeKind.DATA_FLOWS_TO)
+
+        propagator = TaintPropagator(
+            match=lambda n: n.name == "json.loads",
+            params_to_return=[0],
+        )
+        policy = TaintPolicy(
+            sources=lambda n: TaintLabel(name="taint", origin=n.id) if str(n.id) == "s1" else None,
+            sinks=lambda n: str(n.id) == "k1",
+            sanitizers=lambda n: False,
+            propagators=[propagator],
+        )
+        result = run_taint(cpg, policy)
+
+        assert len(result.paths) == 1
+
+    def test_propagator_param_to_return_bool_fallback(self):
+        """The boolean param_to_return works as fallback when params_to_return is None."""
+        cpg = CodePropertyGraph()
+        cpg.add_node(make_node(NodeKind.VARIABLE, "src", "s1", line=1))
+        cpg.add_node(make_node(NodeKind.CALL, "my.lib", "call1", line=2))
+        cpg.add_node(make_node(NodeKind.VARIABLE, "result", "v1", line=2))
+        cpg.add_node(make_node(NodeKind.CALL, "sink", "k1", line=3))
+
+        add_edge(cpg, "s1", "call1", EdgeKind.DATA_FLOWS_TO)
+        add_edge(cpg, "v1", "call1", EdgeKind.DEFINED_BY)
+        add_edge(cpg, "call1", "v1", EdgeKind.DATA_FLOWS_TO)
+        add_edge(cpg, "v1", "k1", EdgeKind.DATA_FLOWS_TO)
+
+        propagator = TaintPropagator(
+            match=lambda n: n.name == "my.lib",
+            param_to_return=True,  # Boolean form, params_to_return is None
+        )
+        policy = TaintPolicy(
+            sources=lambda n: TaintLabel(name="taint", origin=n.id) if str(n.id) == "s1" else None,
+            sinks=lambda n: str(n.id) == "k1",
+            sanitizers=lambda n: False,
+            propagators=[propagator],
+        )
+        result = run_taint(cpg, policy)
+
+        assert len(result.paths) == 1
+
+    def test_propagator_no_propagation_when_param_to_return_false(self):
+        """When param_to_return is False and params_to_return is None, nothing propagates."""
+        cpg = CodePropertyGraph()
+        cpg.add_node(make_node(NodeKind.VARIABLE, "src", "s1", line=1))
+        cpg.add_node(make_node(NodeKind.CALL, "my.lib", "call1", line=2))
+        cpg.add_node(make_node(NodeKind.VARIABLE, "result", "v1", line=2))
+        cpg.add_node(make_node(NodeKind.CALL, "sink", "k1", line=3))
+
+        add_edge(cpg, "s1", "call1", EdgeKind.DATA_FLOWS_TO)
+        add_edge(cpg, "v1", "call1", EdgeKind.DEFINED_BY)
+        # No direct DFG from call to result
+        add_edge(cpg, "v1", "k1", EdgeKind.DATA_FLOWS_TO)
+
+        propagator = TaintPropagator(
+            match=lambda n: n.name == "my.lib",
+            param_to_return=False,
+            params_to_return=None,
+        )
+        policy = TaintPolicy(
+            sources=lambda n: TaintLabel(name="taint", origin=n.id) if str(n.id) == "s1" else None,
+            sinks=lambda n: str(n.id) == "k1",
+            sanitizers=lambda n: False,
+            propagators=[propagator],
+        )
+        result = run_taint(cpg, policy)
+
+        assert len(result.paths) == 0
