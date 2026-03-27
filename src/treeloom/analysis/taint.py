@@ -29,10 +29,20 @@ class TaintLabel:
     """A label attached to tainted data.
 
     Must be hashable (frozen) so it can live in frozensets.
+
+    Attributes:
+        name: Human-readable label name (e.g. "user_input", "env_var").
+        origin: The node that introduced this taint.
+        field_path: For field-sensitive tracking, the dotted field name(s)
+            narrowed so far (e.g. "form", "headers.content_type").  ``None``
+            means object-level taint — the whole object is considered tainted.
+        attrs: Consumer-defined metadata.  Excluded from hash/equality so that
+            extra metadata does not affect label identity.
     """
 
     name: str
     origin: NodeId
+    field_path: str | None = None
     attrs: dict[str, Any] = field(default_factory=dict, hash=False, compare=False)
 
 
@@ -213,10 +223,17 @@ def run_taint(cpg: CodePropertyGraph, policy: TaintPolicy) -> TaintResult:
     # -- Pre-computation ------------------------------------------------------
     summaries = compute_summaries(cpg)
 
-    # Build DATA_FLOWS_TO forward adjacency
+    # Build DATA_FLOWS_TO forward adjacency and field_name lookup in one pass.
+    # field_name is present on edges that represent attribute access (e.g.
+    # ``request.form`` emits an edge with field_name="form").
     dfg_fwd: dict[str, list[str]] = {}
+    dfg_field_names: dict[tuple[str, str], str] = {}
     for edge in cpg.edges(kind=EdgeKind.DATA_FLOWS_TO):
-        dfg_fwd.setdefault(str(edge.source), []).append(str(edge.target))
+        src, tgt = str(edge.source), str(edge.target)
+        dfg_fwd.setdefault(src, []).append(tgt)
+        fn = edge.attrs.get("field_name")
+        if fn is not None:
+            dfg_field_names[(src, tgt)] = fn
 
     # Build CALLS forward adjacency (call site -> callee function)
     calls_fwd: dict[str, list[str]] = {}
@@ -338,15 +355,42 @@ def run_taint(cpg: CodePropertyGraph, policy: TaintPolicy) -> TaintResult:
                     break  # First matching propagator wins
 
         for target_id in targets:
+            # Field-sensitive propagation: if the edge carries a field_name,
+            # narrow or filter labels based on their field_path.
+            #
+            # Rules:
+            #  - field_path=None (object-level): narrows to field_name for soundness.
+            #  - field_path == edge field_name: exact match, propagate as-is.
+            #  - field_path != edge field_name: different field, do NOT propagate.
+            #  - No field_name on edge: propagate labels unchanged.
+            edge_field_name = dfg_field_names.get((current_id, target_id))
+            if edge_field_name is not None:
+                propagated_labels: frozenset[TaintLabel] = frozenset(
+                    TaintLabel(
+                        name=lb.name,
+                        origin=lb.origin,
+                        field_path=edge_field_name,
+                        attrs=lb.attrs,
+                    )
+                    if lb.field_path is None
+                    else lb
+                    for lb in current_labels
+                    if lb.field_path is None or lb.field_path == edge_field_name
+                )
+                if not propagated_labels:
+                    continue  # No labels survive this field access; skip target
+            else:
+                propagated_labels = current_labels
+
             target_labels = labels_at.get(target_id, frozenset())
-            new_labels = current_labels | target_labels
+            new_labels = propagated_labels | target_labels
 
             if new_labels == target_labels:
                 # Fixed point for labels -- but we may still need to update
                 # sanitizer tracking if this path has a weaker sanitizer set.
                 # Check per-origin sanitizer sets below; skip if nothing new.
                 needs_update = False
-                for label in current_labels:
+                for label in propagated_labels:
                     origin_key = (str(label.origin), target_id)
                     existing = sanitizers_on_path.get(origin_key)
                     propagated = current_sanitizers
@@ -362,14 +406,14 @@ def run_taint(cpg: CodePropertyGraph, policy: TaintPolicy) -> TaintResult:
             # Track per-edge label flow
             edge_key = (current_id, target_id)
             existing_edge_labels = edge_labels.get(edge_key, frozenset())
-            edge_labels[edge_key] = existing_edge_labels | current_labels
+            edge_labels[edge_key] = existing_edge_labels | propagated_labels
 
             # Update per-origin sanitizer and bypass tracking at the target.
             # Intersection semantics for the sanitizer set (which sanitizers
             # are common to ALL routes).  Bypass tracking is separate: if any
             # route arrives with an empty sanitizer set, a bypass exists.
             path_is_unsanitized = len(current_sanitizers) == 0
-            for label in current_labels:
+            for label in propagated_labels:
                 origin_key = (str(label.origin), target_id)
                 existing = sanitizers_on_path.get(origin_key)
                 if existing is None:

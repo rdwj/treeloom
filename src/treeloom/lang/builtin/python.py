@@ -625,17 +625,28 @@ class PythonVisitor(TreeSitterVisitor):
             #   1. bare identifier (e.g. `request.form`)
             #   2. attribute access (e.g. `request.form.data`) — recurse
             #   3. subscript (e.g. `obj['key'].attr`) — recurse
+            # Extract the field name (last component of the dotted access) so
+            # the taint engine can do field-sensitive propagation.
+            attr_name_node = node.child_by_field_name("attribute")
+            field_name = (
+                self._node_text(attr_name_node, ctx.source)
+                if attr_name_node is not None
+                else None
+            )
+
             obj_node = node.child_by_field_name("object")
             if obj_node is not None:
                 if obj_node.type == "identifier":
                     obj_name = self._node_text(obj_node, ctx.source)
                     obj_def_id = ctx.defined_vars.get(obj_name)
                     if obj_def_id is not None:
-                        ctx.emitter.emit_data_flow(obj_def_id, attr_id)
+                        kw = {"field_name": field_name} if field_name else {}
+                        ctx.emitter.emit_data_flow(obj_def_id, attr_id, **kw)
                 elif obj_node.type in ("attribute", "subscript"):
                     receiver_id = self._visit_expression(obj_node, ctx)
                     if receiver_id is not None:
-                        ctx.emitter.emit_data_flow(receiver_id, attr_id)
+                        kw = {"field_name": field_name} if field_name else {}
+                        ctx.emitter.emit_data_flow(receiver_id, attr_id, **kw)
             return attr_id
 
         if node.type == "subscript":

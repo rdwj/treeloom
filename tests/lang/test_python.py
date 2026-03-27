@@ -1000,6 +1000,39 @@ def process(obj):
             f"safe_field and unsafe_field should not share data flow, got: {cross_field}"
         )
 
+    def test_attribute_dfg_edges_carry_field_name(self):
+        """DATA_FLOWS_TO edges from attribute access must carry a field_name attr."""
+        source = b"""
+def handle(request):
+    form_data = request.form
+    headers = request.headers
+    return form_data
+"""
+        cpg = CPGBuilder().add_source(source, "attr_field_name.py").build()
+
+        # request is a PARAMETER node; find it so we can check its outgoing edges.
+        req_node = next(
+            (n for n in cpg.nodes(kind=NodeKind.PARAMETER) if n.name == "request"),
+            None,
+        )
+        assert req_node is not None, "Expected a 'request' PARAMETER node"
+
+        dfg_edges = [
+            e for e in cpg.edges(kind=EdgeKind.DATA_FLOWS_TO)
+            if e.source == req_node.id
+        ]
+        assert dfg_edges, "Expected DATA_FLOWS_TO edges from 'request'"
+
+        for edge in dfg_edges:
+            assert "field_name" in edge.attrs, (
+                f"Edge {edge.source} -> {edge.target} missing 'field_name' attr; "
+                f"attrs={edge.attrs}"
+            )
+
+        field_names = {e.attrs["field_name"] for e in dfg_edges}
+        assert "form" in field_names, f"Expected 'form' in field_names, got {field_names}"
+        assert "headers" in field_names, f"Expected 'headers' in field_names, got {field_names}"
+
 
 class TestTypeInference:
     """Type-based call resolution via constructor inference and MRO traversal."""

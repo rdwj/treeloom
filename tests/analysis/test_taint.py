@@ -503,6 +503,132 @@ class TestApplyTo:
 
 
 # ---------------------------------------------------------------------------
+# Field sensitivity
+# ---------------------------------------------------------------------------
+
+class TestFieldSensitivity:
+    """Field-sensitive taint propagation tests.
+
+    Verifies that the taint engine narrows labels when they flow through
+    attribute access edges (edges with a ``field_name`` attr) and blocks
+    labels when the field_path does not match the edge's field_name.
+    """
+
+    def test_object_taint_narrows_to_field(self):
+        """Taint on obj narrows to obj.field when flowing through a field access edge."""
+        cpg = CodePropertyGraph()
+        cpg.add_node(make_node(NodeKind.VARIABLE, "obj", "obj1", line=1))
+        cpg.add_node(make_node(NodeKind.VARIABLE, "obj.safe", "field1", line=2))
+        cpg.add_node(make_node(NodeKind.CALL, "sink", "sink1", line=3))
+        add_edge(cpg, "obj1", "field1", EdgeKind.DATA_FLOWS_TO, field_name="safe")
+        add_edge(cpg, "field1", "sink1", EdgeKind.DATA_FLOWS_TO)
+
+        result = run_taint(cpg, _source_policy({"obj1"}, {"sink1"}))
+
+        assert len(result.paths) == 1, f"Expected 1 path, got {result.paths}"
+        labels = result.labels_at(NodeId("sink1"))
+        assert any(lb.field_path == "safe" for lb in labels), (
+            f"Expected field_path='safe' in labels at sink, got {labels}"
+        )
+
+    def test_different_field_not_propagated(self):
+        """Taint on obj.tainted should NOT flow through a obj.safe access edge."""
+        cpg = CodePropertyGraph()
+        cpg.add_node(make_node(NodeKind.VARIABLE, "obj.tainted", "tfield", line=1))
+        cpg.add_node(make_node(NodeKind.VARIABLE, "obj.safe", "sfield", line=2))
+        cpg.add_node(make_node(NodeKind.CALL, "sink", "sink1", line=3))
+        # tfield -> sfield through a "safe" field_name — mismatches "tainted"
+        add_edge(cpg, "tfield", "sfield", EdgeKind.DATA_FLOWS_TO, field_name="safe")
+        add_edge(cpg, "sfield", "sink1", EdgeKind.DATA_FLOWS_TO)
+
+        policy = TaintPolicy(
+            sources=lambda n: (
+                TaintLabel(name="taint", origin=n.id, field_path="tainted")
+                if str(n.id) == "tfield" else None
+            ),
+            sinks=lambda n: str(n.id) == "sink1",
+            sanitizers=lambda n: False,
+        )
+        result = run_taint(cpg, policy)
+
+        assert len(result.unsanitized_paths()) == 0, (
+            f"Expected no paths to sink, got {result.paths}"
+        )
+
+    def test_matching_field_propagates(self):
+        """Taint on obj (field_path=None) propagates through a matching field access."""
+        cpg = CodePropertyGraph()
+        cpg.add_node(make_node(NodeKind.VARIABLE, "obj", "obj1", line=1))
+        cpg.add_node(make_node(NodeKind.VARIABLE, "obj.form", "form1", line=2))
+        cpg.add_node(make_node(NodeKind.CALL, "sink", "sink1", line=3))
+        add_edge(cpg, "obj1", "form1", EdgeKind.DATA_FLOWS_TO, field_name="form")
+        add_edge(cpg, "form1", "sink1", EdgeKind.DATA_FLOWS_TO)
+
+        result = run_taint(cpg, _source_policy({"obj1"}, {"sink1"}))
+
+        assert len(result.paths) == 1, f"Expected 1 path, got {result.paths}"
+
+    def test_no_field_edge_preserves_field_path(self):
+        """Labels with field_path propagate unchanged through edges without field_name."""
+        cpg = CodePropertyGraph()
+        cpg.add_node(make_node(NodeKind.VARIABLE, "x", "x1", line=1))
+        cpg.add_node(make_node(NodeKind.VARIABLE, "y", "y1", line=2))
+        cpg.add_node(make_node(NodeKind.CALL, "sink", "sink1", line=3))
+        add_edge(cpg, "x1", "y1", EdgeKind.DATA_FLOWS_TO)  # no field_name
+        add_edge(cpg, "y1", "sink1", EdgeKind.DATA_FLOWS_TO)
+
+        policy = TaintPolicy(
+            sources=lambda n: (
+                TaintLabel(name="taint", origin=n.id, field_path="form")
+                if str(n.id) == "x1" else None
+            ),
+            sinks=lambda n: str(n.id) == "sink1",
+            sanitizers=lambda n: False,
+        )
+        result = run_taint(cpg, policy)
+
+        assert len(result.paths) == 1, f"Expected 1 path, got {result.paths}"
+        labels = result.labels_at(NodeId("sink1"))
+        assert any(lb.field_path == "form" for lb in labels), (
+            f"Expected field_path='form' preserved at sink, got {labels}"
+        )
+
+    def test_object_level_fallback_soundness(self):
+        """Object-level taint (field_path=None) always propagates for soundness."""
+        cpg = CodePropertyGraph()
+        cpg.add_node(make_node(NodeKind.VARIABLE, "obj", "obj1", line=1))
+        cpg.add_node(make_node(NodeKind.VARIABLE, "obj.anything", "f1", line=2))
+        cpg.add_node(make_node(NodeKind.CALL, "sink", "sink1", line=3))
+        add_edge(cpg, "obj1", "f1", EdgeKind.DATA_FLOWS_TO, field_name="anything")
+        add_edge(cpg, "f1", "sink1", EdgeKind.DATA_FLOWS_TO)
+
+        result = run_taint(cpg, _source_policy({"obj1"}, {"sink1"}))
+
+        assert len(result.paths) == 1, (
+            "Object-level taint must propagate through any field access for soundness"
+        )
+
+    def test_intermediate_variable_inherits_field_path(self):
+        """x = obj; x.field — taint from obj narrows to 'field' when reaching x.field."""
+        cpg = CodePropertyGraph()
+        cpg.add_node(make_node(NodeKind.VARIABLE, "obj", "obj1", line=1))
+        cpg.add_node(make_node(NodeKind.VARIABLE, "x", "x1", line=2))
+        cpg.add_node(make_node(NodeKind.VARIABLE, "x.field", "xf1", line=3))
+        cpg.add_node(make_node(NodeKind.CALL, "sink", "sink1", line=4))
+        add_edge(cpg, "obj1", "x1", EdgeKind.DATA_FLOWS_TO)              # x = obj
+        add_edge(cpg, "x1", "xf1", EdgeKind.DATA_FLOWS_TO, field_name="field")  # x.field
+        add_edge(cpg, "xf1", "sink1", EdgeKind.DATA_FLOWS_TO)
+
+        result = run_taint(cpg, _source_policy({"obj1"}, {"sink1"}))
+
+        assert len(result.paths) == 1, f"Expected 1 path, got {result.paths}"
+        labels = result.labels_at(NodeId("sink1"))
+        assert any(lb.field_path == "field" for lb in labels), (
+            f"Expected field_path='field' at sink, got {labels}"
+        )
+
+
+# ---------------------------------------------------------------------------
 # Integration: cpg.taint(policy) entry point
 # ---------------------------------------------------------------------------
 

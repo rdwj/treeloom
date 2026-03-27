@@ -344,10 +344,16 @@ class CPGBuilder:
             source=from_node, target=to_node, kind=EdgeKind.FLOWS_TO
         ))
 
-    def emit_data_flow(self, source: NodeId, target: NodeId) -> None:
-        """Emit a DATA_FLOWS_TO edge."""
+    def emit_data_flow(self, source: NodeId, target: NodeId, **attrs: Any) -> None:
+        """Emit a DATA_FLOWS_TO edge.
+
+        Keyword arguments become edge attrs.  Pass ``field_name=<str>`` to
+        record that the edge represents an attribute access, enabling
+        field-sensitive taint propagation.
+        """
         self._cpg.add_edge(CpgEdge(
-            source=source, target=target, kind=EdgeKind.DATA_FLOWS_TO
+            source=source, target=target, kind=EdgeKind.DATA_FLOWS_TO,
+            attrs=dict(attrs) if attrs else {},
         ))
 
     def emit_definition(self, variable: NodeId, defined_by: NodeId) -> None:

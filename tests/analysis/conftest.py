@@ -39,6 +39,6 @@ def make_node(
     )
 
 
-def add_edge(cpg: CodePropertyGraph, src: str, tgt: str, kind: EdgeKind) -> None:
+def add_edge(cpg: CodePropertyGraph, src: str, tgt: str, kind: EdgeKind, **attrs: object) -> None:
     """Add an edge between two nodes identified by their string IDs."""
-    cpg.add_edge(CpgEdge(source=NodeId(src), target=NodeId(tgt), kind=kind))
+    cpg.add_edge(CpgEdge(source=NodeId(src), target=NodeId(tgt), kind=kind, attrs=dict(attrs)))
