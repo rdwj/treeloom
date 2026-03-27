@@ -999,3 +999,122 @@ def process(obj):
         assert not cross_field, (
             f"safe_field and unsafe_field should not share data flow, got: {cross_field}"
         )
+
+
+class TestTypeInference:
+    """Type-based call resolution via constructor inference and MRO traversal."""
+
+    @pytest.fixture()
+    def cpg(self):
+        return _build("type_inference.py")
+
+    def test_class_bases_recorded(self, cpg):
+        """Dog(Animal) should record bases=['Animal'] in attrs."""
+        dog = next(n for n in cpg.nodes(kind=NodeKind.CLASS) if n.name == "Dog")
+        assert dog.attrs.get("bases") == ["Animal"]
+
+    def test_class_no_bases(self, cpg):
+        """Animal has no bases, so attrs should have no 'bases' key."""
+        animal = next(
+            n for n in cpg.nodes(kind=NodeKind.CLASS) if n.name == "Animal"
+        )
+        assert "bases" not in animal.attrs
+
+    def test_variable_inferred_type(self, cpg):
+        """d = Dog() should set inferred_type='Dog' on the variable."""
+        d_vars = [n for n in cpg.nodes(kind=NodeKind.VARIABLE) if n.name == "d"]
+        assert len(d_vars) >= 1
+        assert any(v.attrs.get("inferred_type") == "Dog" for v in d_vars)
+
+    def test_call_receiver_type(self, cpg):
+        """d.speak() should have receiver_inferred_type='Dog' in attrs."""
+        speak_calls = [
+            n for n in cpg.nodes(kind=NodeKind.CALL) if n.name == "d.speak"
+        ]
+        assert len(speak_calls) >= 1
+        assert speak_calls[0].attrs.get("receiver_inferred_type") == "Dog"
+
+    def test_dog_speak_resolves_to_dog_method(self, cpg):
+        """d.speak() should resolve to Dog.speak, not Animal.speak."""
+        dog_class = next(
+            n for n in cpg.nodes(kind=NodeKind.CLASS) if n.name == "Dog"
+        )
+        dog_speak = next(
+            n for n in cpg.nodes(kind=NodeKind.FUNCTION)
+            if n.name == "speak" and n.scope == dog_class.id
+        )
+        d_speak_call = next(
+            n for n in cpg.nodes(kind=NodeKind.CALL) if n.name == "d.speak"
+        )
+        calls_edges = list(cpg.edges(kind=EdgeKind.CALLS))
+        assert any(
+            e.source == d_speak_call.id and e.target == dog_speak.id
+            for e in calls_edges
+        ), (
+            f"Expected d.speak() -> Dog.speak edge, got CALLS edges: "
+            f"{[(cpg.node(e.source).name, cpg.node(e.target).name) for e in calls_edges]}"
+        )
+
+    def test_cat_speak_resolves_to_cat_method(self, cpg):
+        """c.speak() should resolve to Cat.speak, not Animal.speak."""
+        cat_class = next(
+            n for n in cpg.nodes(kind=NodeKind.CLASS) if n.name == "Cat"
+        )
+        cat_speak = next(
+            n for n in cpg.nodes(kind=NodeKind.FUNCTION)
+            if n.name == "speak" and n.scope == cat_class.id
+        )
+        c_speak_call = next(
+            n for n in cpg.nodes(kind=NodeKind.CALL) if n.name == "c.speak"
+        )
+        calls_edges = list(cpg.edges(kind=EdgeKind.CALLS))
+        assert any(
+            e.source == c_speak_call.id and e.target == cat_speak.id
+            for e in calls_edges
+        ), (
+            f"Expected c.speak() -> Cat.speak edge, got CALLS edges: "
+            f"{[(cpg.node(e.source).name, cpg.node(e.target).name) for e in calls_edges]}"
+        )
+
+    def test_inherited_method_resolves_via_mro(self, cpg):
+        """d.breathe() should resolve to Animal.breathe (inherited)."""
+        animal_class = next(
+            n for n in cpg.nodes(kind=NodeKind.CLASS) if n.name == "Animal"
+        )
+        animal_breathe = next(
+            n for n in cpg.nodes(kind=NodeKind.FUNCTION)
+            if n.name == "breathe" and n.scope == animal_class.id
+        )
+        d_breathe_call = next(
+            n for n in cpg.nodes(kind=NodeKind.CALL)
+            if n.name == "d.breathe"
+        )
+        calls_edges = list(cpg.edges(kind=EdgeKind.CALLS))
+        assert any(
+            e.source == d_breathe_call.id and e.target == animal_breathe.id
+            for e in calls_edges
+        ), (
+            f"Expected d.breathe() -> Animal.breathe edge, got CALLS edges: "
+            f"{[(cpg.node(e.source).name, cpg.node(e.target).name) for e in calls_edges]}"
+        )
+
+    def test_own_method_resolves_directly(self, cpg):
+        """d.fetch() should resolve to Dog.fetch (own method)."""
+        dog_class = next(
+            n for n in cpg.nodes(kind=NodeKind.CLASS) if n.name == "Dog"
+        )
+        dog_fetch = next(
+            n for n in cpg.nodes(kind=NodeKind.FUNCTION)
+            if n.name == "fetch" and n.scope == dog_class.id
+        )
+        d_fetch_call = next(
+            n for n in cpg.nodes(kind=NodeKind.CALL) if n.name == "d.fetch"
+        )
+        calls_edges = list(cpg.edges(kind=EdgeKind.CALLS))
+        assert any(
+            e.source == d_fetch_call.id and e.target == dog_fetch.id
+            for e in calls_edges
+        ), (
+            f"Expected d.fetch() -> Dog.fetch edge, got CALLS edges: "
+            f"{[(cpg.node(e.source).name, cpg.node(e.target).name) for e in calls_edges]}"
+        )

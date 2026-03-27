@@ -22,7 +22,8 @@ class NodeEmitter(Protocol):
     def emit_module(self, name: str, path: Path) -> NodeId: ...
 
     def emit_class(
-        self, name: str, location: SourceLocation, scope: NodeId
+        self, name: str, location: SourceLocation, scope: NodeId,
+        bases: list[str] | None = None,
     ) -> NodeId: ...
 
     def emit_function(
@@ -45,7 +46,8 @@ class NodeEmitter(Protocol):
     ) -> NodeId: ...
 
     def emit_variable(
-        self, name: str, location: SourceLocation, scope: NodeId
+        self, name: str, location: SourceLocation, scope: NodeId,
+        inferred_type: str | None = None,
     ) -> NodeId: ...
 
     def emit_call(
@@ -54,6 +56,7 @@ class NodeEmitter(Protocol):
         location: SourceLocation,
         scope: NodeId,
         args: list[str] | None = None,
+        receiver_inferred_type: str | None = None,
     ) -> NodeId: ...
 
     def emit_literal(

@@ -64,24 +64,51 @@ class PythonVisitor(TreeSitterVisitor):
     def resolve_calls(
         self, cpg: CodePropertyGraph
     ) -> list[tuple[NodeId, NodeId]]:
-        """Link CALL nodes to FUNCTION definitions by name matching."""
-        # Build name -> [functions] mapping to handle duplicate names
-        # (e.g., Calculator.add and standalone add)
+        """Link CALL nodes to FUNCTION definitions.
+
+        Uses inferred receiver types and MRO traversal for method calls,
+        falling back to name-based matching for plain function calls.
+        """
         functions: dict[str, list[CpgNode]] = {}
         for n in cpg.nodes(kind=NodeKind.FUNCTION):
             functions.setdefault(n.name, []).append(n)
+
+        # Build class hierarchy and method index for type-based resolution
+        class_nodes: dict[str, CpgNode] = {}
+        for n in cpg.nodes(kind=NodeKind.CLASS):
+            class_nodes[n.name] = n
+
+        method_index: dict[tuple[str, str], CpgNode] = {}
+        for fn in cpg.nodes(kind=NodeKind.FUNCTION):
+            scope = cpg.scope_of(fn.id)
+            if scope is not None and scope.kind == NodeKind.CLASS:
+                method_index[(scope.name, fn.name)] = fn
 
         resolved: list[tuple[NodeId, NodeId]] = []
 
         for call_node in cpg.nodes(kind=NodeKind.CALL):
             target = call_node.name
-            fn = self._resolve_single_call(call_node, target, functions, cpg)
+            fn: CpgNode | None = None
 
-            # Try qualified name fallback: module.func or obj.method
+            # Try type-based resolution first for method calls
+            receiver_type = call_node.attrs.get("receiver_inferred_type")
+            if receiver_type is not None and "." in target:
+                method_name = target.rsplit(".", 1)[-1]
+                fn = self._resolve_method_via_mro(
+                    receiver_type, method_name,
+                    method_index, class_nodes,
+                )
+
+            # Fall back to name-based resolution
+            if fn is None:
+                fn = self._resolve_single_call(
+                    call_node, target, functions, cpg,
+                )
+
             if fn is None and "." in target:
                 short_name = target.rsplit(".", 1)[-1]
                 fn = self._resolve_single_call(
-                    call_node, short_name, functions, cpg
+                    call_node, short_name, functions, cpg,
                 )
 
             if fn is not None:
@@ -89,6 +116,32 @@ class PythonVisitor(TreeSitterVisitor):
                 resolved.append((call_node.id, fn.id))
 
         return resolved
+
+    @staticmethod
+    def _resolve_method_via_mro(
+        class_name: str,
+        method_name: str,
+        method_index: dict[tuple[str, str], CpgNode],
+        class_nodes: dict[str, CpgNode],
+    ) -> CpgNode | None:
+        """Resolve a method by walking the class MRO (left-to-right BFS)."""
+        visited: set[str] = set()
+        queue = [class_name]
+        while queue:
+            current = queue.pop(0)
+            if current in visited:
+                continue
+            visited.add(current)
+
+            result = method_index.get((current, method_name))
+            if result is not None:
+                return result
+
+            node = class_nodes.get(current)
+            if node is not None:
+                bases = node.attrs.get("bases", [])
+                queue.extend(bases)
+        return None
 
     @staticmethod
     def _resolve_single_call(
@@ -143,7 +196,19 @@ class PythonVisitor(TreeSitterVisitor):
         loc = self._location(node, ctx.file_path)
         scope = ctx.current_scope
 
-        class_id = ctx.emitter.emit_class(class_name, loc, scope)
+        # Extract base class names from superclasses (argument_list)
+        bases: list[str] = []
+        superclasses = node.child_by_field_name("superclasses")
+        if superclasses is not None:
+            for child in superclasses.children:
+                if child.type == "identifier":
+                    bases.append(self._node_text(child, ctx.source))
+                elif child.type == "attribute":
+                    bases.append(self._node_text(child, ctx.source))
+
+        class_id = ctx.emitter.emit_class(
+            class_name, loc, scope, bases=bases or None,
+        )
         ctx.scope_stack.append(class_id)
         ctx.defined_vars.push()
 
@@ -260,7 +325,28 @@ class PythonVisitor(TreeSitterVisitor):
         scope = ctx.current_scope
         var_name = self._node_text(left, ctx.source)
         loc = self._location(left, ctx.file_path)
-        var_id = ctx.emitter.emit_variable(var_name, loc, scope)
+
+        # Infer type from constructor call on RHS: x = Dog()
+        # Only for simple identifier LHS (not tuple unpacking, etc.)
+        inferred_type: str | None = None
+        if (
+            left.type == "identifier"
+            and right is not None
+            and right.type == "call"
+        ):
+            call_name = self._extract_call_name(right)
+            if call_name is not None:
+                short = (
+                    call_name.rsplit(".", 1)[-1]
+                    if "." in call_name
+                    else call_name
+                )
+                inferred_type = short
+                ctx.var_types[var_name] = short
+
+        var_id = ctx.emitter.emit_variable(
+            var_name, loc, scope, inferred_type=inferred_type,
+        )
 
         # Track this variable definition for later USED_BY resolution
         ctx.defined_vars[var_name] = var_id
@@ -774,6 +860,14 @@ class PythonVisitor(TreeSitterVisitor):
         else:
             target_name = self._node_text(func_node, ctx.source)
 
+        # Look up receiver's inferred type for method calls
+        receiver_type: str | None = None
+        if func_node.type == "attribute":
+            obj = func_node.child_by_field_name("object")
+            if obj is not None and obj.type == "identifier":
+                receiver_name = self._node_text(obj, ctx.source)
+                receiver_type = ctx.var_types.get(receiver_name)
+
         loc = self._location(node, ctx.file_path)
         scope = ctx.current_scope
 
@@ -789,7 +883,10 @@ class PythonVisitor(TreeSitterVisitor):
                     arg_ids.append(self._visit_expression(child, ctx))
                     arg_is_var.append(child.type == "identifier")
 
-        call_id = ctx.emitter.emit_call(target_name, loc, scope, args=arg_texts)
+        call_id = ctx.emitter.emit_call(
+            target_name, loc, scope, args=arg_texts,
+            receiver_inferred_type=receiver_type,
+        )
 
         # Wire data flow from the chained receiver call (if any) to this call
         if receiver_call_id is not None:
@@ -831,6 +928,7 @@ class _VisitContext:
         "scope_stack",
         "defined_vars",
         "pending_decorators",
+        "var_types",
     )
 
     def __init__(
@@ -845,6 +943,7 @@ class _VisitContext:
         self.scope_stack: list[NodeId] = []
         self.defined_vars: ScopeStack = ScopeStack()
         self.pending_decorators: list[str] = []
+        self.var_types: dict[str, str] = {}
 
     @property
     def current_scope(self) -> NodeId:

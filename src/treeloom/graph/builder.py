@@ -115,10 +115,16 @@ class CPGBuilder:
         return self._emit_node(NodeKind.MODULE, name, loc, scope=None)
 
     def emit_class(
-        self, name: str, location: SourceLocation, scope: NodeId
+        self, name: str, location: SourceLocation, scope: NodeId,
+        bases: list[str] | None = None,
     ) -> NodeId:
         """Emit a CLASS node contained in the given scope."""
-        node_id = self._emit_node(NodeKind.CLASS, name, location, scope=scope)
+        attrs: dict[str, Any] = {}
+        if bases:
+            attrs["bases"] = bases
+        node_id = self._emit_node(
+            NodeKind.CLASS, name, location, scope=scope, attrs=attrs,
+        )
         self._emit_contains(scope, node_id)
         return node_id
 
@@ -179,10 +185,16 @@ class CPGBuilder:
         return node_id
 
     def emit_variable(
-        self, name: str, location: SourceLocation, scope: NodeId
+        self, name: str, location: SourceLocation, scope: NodeId,
+        inferred_type: str | None = None,
     ) -> NodeId:
         """Emit a VARIABLE node contained in the given scope."""
-        node_id = self._emit_node(NodeKind.VARIABLE, name, location, scope=scope)
+        attrs: dict[str, Any] = {}
+        if inferred_type is not None:
+            attrs["inferred_type"] = inferred_type
+        node_id = self._emit_node(
+            NodeKind.VARIABLE, name, location, scope=scope, attrs=attrs,
+        )
         self._emit_contains(scope, node_id)
         return node_id
 
@@ -192,14 +204,14 @@ class CPGBuilder:
         location: SourceLocation,
         scope: NodeId,
         args: list[str] | None = None,
+        receiver_inferred_type: str | None = None,
     ) -> NodeId:
         """Emit a CALL node contained in the given scope."""
+        attrs: dict[str, Any] = {"args_count": len(args) if args else 0}
+        if receiver_inferred_type is not None:
+            attrs["receiver_inferred_type"] = receiver_inferred_type
         node_id = self._emit_node(
-            NodeKind.CALL,
-            target_name,
-            location,
-            scope=scope,
-            attrs={"args_count": len(args) if args else 0},
+            NodeKind.CALL, target_name, location, scope=scope, attrs=attrs,
         )
         self._emit_contains(scope, node_id)
         return node_id
