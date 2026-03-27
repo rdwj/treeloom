@@ -205,6 +205,15 @@ mypy src/treeloom/
 
 ## Changelog
 
+### Version 0.3.0
+
+- `TaintPolicy.implicit_param_sources`: treat function parameters as automatic taint sources (#54)
+- Per-edge taint labels: `TaintResult.edge_labels(src, tgt)` returns which labels flow along each edge (#56)
+- `GraphQuery.paths_to_sink()`: backward traversal from a sink to find all reaching source paths (#57)
+- Inter-procedural taint integration tests: verified 3-function call chain propagation (#55)
+- Fixed sanitizer convergence: paths through different sanitizers no longer falsely marked unsanitized
+- 888 tests
+
 ### Version 0.2.7
 
 - Diff defaults to basename matching for cross-directory comparisons (e.g., bad/ vs good/)

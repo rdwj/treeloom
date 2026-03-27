@@ -321,6 +321,7 @@ class TaintPolicy:
     sinks: Callable[[CpgNode], bool]                   # Is this node a sink?
     sanitizers: Callable[[CpgNode], bool]               # Does this node sanitize taint?
     propagators: list[TaintPropagator] = field(default_factory=list)
+    implicit_param_sources: bool = False                # Auto-seed all PARAMETER nodes as taint sources
 
 @dataclass
 class TaintLabel:
@@ -357,13 +358,14 @@ class TaintResult:
     def unsanitized_paths(self) -> list[TaintPath]
     def sanitized_paths(self) -> list[TaintPath]
     def labels_at(self, node_id: NodeId) -> frozenset[TaintLabel]
+    def edge_labels(self, source: NodeId, target: NodeId) -> frozenset[TaintLabel]
 ```
 
 ### Taint algorithm
 
 Worklist-based forward analysis:
 
-1. Initialize worklist with all nodes where `policy.sources(node)` returns a non-None label. Each worklist entry is `(node_id, frozenset_of_labels)`.
+1. Initialize worklist with all nodes where `policy.sources(node)` returns a non-None label. When `policy.implicit_param_sources` is True, also seed all PARAMETER nodes (that aren't already explicit sources) with labels of the form `param:{name}`. Each worklist entry is `(node_id, frozenset_of_labels)`.
 2. Maintain a map `labels_at: dict[NodeId, frozenset[TaintLabel]]` tracking which labels have reached each node. Initialize source nodes with their labels.
 3. Pop a node from the worklist. For each outgoing DATA_FLOWS_TO edge:
    a. Compute the labels that would propagate (current node's labels).
@@ -404,6 +406,7 @@ class GraphQuery:
 
     # Path queries
     def paths_between(self, source: NodeId, target: NodeId, cutoff: int = 10) -> list[list[CpgNode]]
+    def paths_to_sink(self, sink_id: NodeId, edge_kinds: frozenset[EdgeKind] | None = None, cutoff: int = 20) -> list[list[CpgNode]]
     def reachable_from(self, node_id: NodeId, edge_kinds: frozenset[EdgeKind] | None = None) -> set[CpgNode]
     def reaching(self, node_id: NodeId, edge_kinds: frozenset[EdgeKind] | None = None) -> set[CpgNode]
 

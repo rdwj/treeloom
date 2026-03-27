@@ -1,6 +1,6 @@
 # treeloom
 
-> Language-agnostic Code Property Graph library for Python. Parses source code via tree-sitter, builds a unified graph (AST + control flow + data flow + call graph), and provides taint analysis, pattern matching, and visualization. Supports Python, JavaScript, TypeScript, Go, Java, C, C++, and Rust. 862 tests. Current version: 0.2.5.
+> Language-agnostic Code Property Graph library for Python. Parses source code via tree-sitter, builds a unified graph (AST + control flow + data flow + call graph), and provides taint analysis, pattern matching, and visualization. Supports Python, JavaScript, TypeScript, Go, Java, C, C++, and Rust. 888 tests. Current version: 0.3.0.
 
 All public types are importable from the top-level `treeloom` package.
 
@@ -47,11 +47,11 @@ All operations are available from the `treeloom` command:
 - `EdgeKind`: Enum -- CONTAINS, HAS_PARAMETER, HAS_RETURN_TYPE, FLOWS_TO, BRANCHES_TO, DATA_FLOWS_TO, DEFINED_BY, USED_BY, CALLS, RESOLVES_TO, IMPORTS
 - `CpgNode`: Dataclass with `id: NodeId`, `kind: NodeKind`, `name: str`, `location: SourceLocation | None`, `scope: NodeId | None`, `attrs: dict`
 - `NodeId`: Opaque, hashable identifier. Never construct directly -- only use IDs returned by the builder or graph.
-- `TaintPolicy`: Consumer-provided callbacks -- `sources(node) -> TaintLabel | None`, `sinks(node) -> bool`, `sanitizers(node) -> bool`
-- `TaintResult`: Contains `paths: list[TaintPath]` with methods `unsanitized_paths()`, `sanitized_paths()`, `paths_to_sink()`, `labels_at()`, `apply_to(cpg)`
+- `TaintPolicy`: Consumer-provided callbacks -- `sources(node) -> TaintLabel | None`, `sinks(node) -> bool`, `sanitizers(node) -> bool`; `implicit_param_sources: bool = False` auto-seeds all PARAMETER nodes as taint sources
+- `TaintResult`: Contains `paths: list[TaintPath]` with methods `unsanitized_paths()`, `sanitized_paths()`, `paths_to_sink()`, `labels_at()`, `apply_to(cpg)`, `edge_labels(source, target) -> frozenset[TaintLabel]`
 - `FunctionSummary` / `compute_summaries`: Per-function summary of which parameters flow to return values; used by the taint engine for inter-procedural analysis
 - `forward_reachable` / `backward_reachable`: BFS reachability helpers (edge-kind-filtered) exported from `treeloom.analysis.reachability`
-- `GraphQuery`: Path queries (`paths_between`, `reachable_from`, `reaching`), node lookup (`node_at`, `nodes_in_file`), pattern matching (`match_chain`)
+- `GraphQuery`: Path queries (`paths_between`, `reachable_from`, `reaching`, `paths_to_sink`), node lookup (`node_at`, `nodes_in_file`), pattern matching (`match_chain`)
 - `ChainPattern` / `StepMatcher`: Declarative pattern matching with wildcard support and edge-kind filtering
 - `Overlay` / `OverlayStyle`: Consumer-injected visual styling for HTML export
 - `to_json` / `from_json`: Round-trip JSON serialization including annotations

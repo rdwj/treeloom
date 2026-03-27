@@ -1,6 +1,6 @@
 # treeloom
 
-> Language-agnostic Code Property Graph library for Python. Parses source code via tree-sitter, builds a unified graph (AST + control flow + data flow + call graph), and provides taint analysis, pattern matching, and visualization. Supports Python, JavaScript, TypeScript, Go, Java, C, C++, and Rust. 862 tests. Current version: 0.2.5.
+> Language-agnostic Code Property Graph library for Python. Parses source code via tree-sitter, builds a unified graph (AST + control flow + data flow + call graph), and provides taint analysis, pattern matching, and visualization. Supports Python, JavaScript, TypeScript, Go, Java, C, C++, and Rust. 888 tests. Current version: 0.3.0.
 
 All public types are importable from the top-level `treeloom` package. Install with `pip install treeloom[languages]` for all grammar packages, or `pip install treeloom` for core only (no parsing without grammars).
 
@@ -180,6 +180,7 @@ class TaintPolicy:
     sinks: Callable[[CpgNode], bool]
     sanitizers: Callable[[CpgNode], bool]
     propagators: list[TaintPropagator] = []
+    implicit_param_sources: bool = False  # auto-seed all PARAMETER nodes as taint sources with label "param:{name}"
 
 @dataclass
 class TaintPropagator:
@@ -204,10 +205,11 @@ class TaintResult:
     def unsanitized_paths(self) -> list[TaintPath]
     def sanitized_paths(self) -> list[TaintPath]
     def labels_at(self, node_id: NodeId) -> frozenset[TaintLabel]
+    def edge_labels(self, source: NodeId, target: NodeId) -> frozenset[TaintLabel]
     def apply_to(self, cpg: CodePropertyGraph) -> None
 ```
 
-The taint engine uses worklist-based forward analysis over DATA_FLOWS_TO edges. Sanitizers mark paths as sanitized but do not stop propagation. Inter-procedural flow uses function summaries computed from param-to-return DFG paths.
+The taint engine uses worklist-based forward analysis over DATA_FLOWS_TO edges. Sanitizers mark paths as sanitized but do not stop propagation. Inter-procedural flow uses function summaries computed from param-to-return DFG paths. When `implicit_param_sources=True`, all PARAMETER nodes are automatically seeded as taint sources with labels of the form `param:{name}`.
 
 **Stamping taint onto the graph**: After running taint, call `result.apply_to(cpg)` to annotate every tainted node/edge in the CPG. This makes the graph self-describing — any node inspection, subgraph extraction, or serialization carries taint status:
 
@@ -255,6 +257,7 @@ class GraphQuery:
     def paths_between(self, source: NodeId, target: NodeId, cutoff: int = 10) -> list[list[CpgNode]]
     def reachable_from(self, node_id: NodeId, edge_kinds: frozenset[EdgeKind] | None = None) -> set[CpgNode]
     def reaching(self, node_id: NodeId, edge_kinds: frozenset[EdgeKind] | None = None) -> set[CpgNode]
+    def paths_to_sink(self, sink_id: NodeId, edge_kinds: frozenset[EdgeKind] | None = None, cutoff: int = 20) -> list[list[CpgNode]]
     def node_at(self, file: Path, line: int) -> CpgNode | None
     def nodes_in_file(self, file: Path) -> list[CpgNode]
     def nodes_in_scope(self, scope_id: NodeId) -> list[CpgNode]
