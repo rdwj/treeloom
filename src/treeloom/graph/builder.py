@@ -5,14 +5,19 @@ from __future__ import annotations
 import fnmatch
 import hashlib
 import logging
+import time
 import warnings
 from pathlib import Path, PurePosixPath
-from typing import Any
+from typing import Any, Callable
 
 from treeloom.graph.cpg import CodePropertyGraph
 from treeloom.model.edges import CpgEdge, EdgeKind
 from treeloom.model.location import SourceLocation
 from treeloom.model.nodes import CpgNode, NodeId, NodeKind
+
+# Callback type for build progress reporting.
+# Called with (phase_name: str, detail: str) at phase boundaries.
+BuildProgressCallback = Callable[[str, str], None]
 
 logger = logging.getLogger(__name__)
 
@@ -25,6 +30,19 @@ _DEFAULT_EXCLUDES = [
 ]
 
 
+class BuildTimeoutError(Exception):
+    """Raised when a build exceeds the configured timeout."""
+
+    def __init__(self, phase: str, elapsed: float, timeout: float) -> None:
+        self.phase = phase
+        self.elapsed = elapsed
+        self.timeout = timeout
+        super().__init__(
+            f"Build timed out after {elapsed:.1f}s after completing {phase} "
+            f"(limit: {timeout:.0f}s)"
+        )
+
+
 class CPGBuilder:
     """Fluent builder for constructing a CodePropertyGraph from source files.
 
@@ -32,18 +50,40 @@ class CPGBuilder:
     the ``emit_*`` methods to populate the graph during the visit phase.
     """
 
-    def __init__(self, registry: Any | None = None) -> None:
+    def __init__(
+        self,
+        registry: Any | None = None,
+        progress: BuildProgressCallback | None = None,
+        timeout: float | None = None,
+    ) -> None:
         self._registry = registry
         self._cpg = CodePropertyGraph()
         self._counter: int = 0
         self._sources: list[tuple[bytes, str, str | None]] = []
         self._files: list[Path] = []
         self._file_snapshots: dict[str, str] = {}  # POSIX path string -> content SHA-256
+        self._progress = progress
+        self._timeout = timeout
+        self._build_start: float | None = None
 
     @staticmethod
     def _file_hash(path: Path) -> str:
         """SHA-256 hex digest of file contents."""
         return hashlib.sha256(path.read_bytes()).hexdigest()
+
+    def _report(self, phase: str, detail: str) -> None:
+        """Report build progress via callback and logger."""
+        logger.debug("%s: %s", phase, detail)
+        if self._progress is not None:
+            self._progress(phase, detail)
+
+    def _check_timeout(self, phase: str) -> None:
+        """Raise BuildTimeoutError if the build has exceeded its timeout."""
+        if self._timeout is None or self._build_start is None:
+            return
+        elapsed = time.monotonic() - self._build_start
+        if elapsed >= self._timeout:
+            raise BuildTimeoutError(phase, elapsed, self._timeout)
 
     # -- Fluent configuration -------------------------------------------------
 
@@ -88,29 +128,62 @@ class CPGBuilder:
         4. Call resolution: link call sites to definitions
         5. Inter-procedural DFG: propagate data flow across calls (Phase 3)
         """
+        self._build_start = time.monotonic()
         registry = self._get_registry()
 
-        # Drain and process queued files
+        # Parse phase
+        t0 = time.monotonic()
         queued_files = self._files
         self._files = []
         for file_path in queued_files:
             self._process_file(file_path, registry)
 
-        # Drain and process queued raw sources
         queued_sources = self._sources
         self._sources = []
         for source_bytes, filename, language in queued_sources:
             self._process_source(source_bytes, filename, language, registry)
+        elapsed = time.monotonic() - t0
+        self._report(
+            "Parse",
+            f"done ({elapsed:.1f}s, {len(self._cpg.files)} files, "
+            f"{self._cpg.node_count} nodes)",
+        )
+        self._check_timeout("Parse")
 
-        # Phase 3: CFG — connect statements within each function
+        # CFG — connect statements within each function
+        t0 = time.monotonic()
         self._build_cfg()
+        func_count = sum(1 for _ in self._cpg.nodes(kind=NodeKind.FUNCTION))
+        elapsed = time.monotonic() - t0
+        self._report("CFG", f"done ({elapsed:.1f}s, {func_count} functions)")
+        self._check_timeout("CFG")
 
         # Call resolution: let each visitor link CALL nodes to FUNCTION defs
         if registry is not None:
+            t0 = time.monotonic()
+            call_count_before = sum(
+                1 for _ in self._cpg.edges(kind=EdgeKind.CALLS)
+            )
             self._resolve_calls(registry)
+            calls_resolved = (
+                sum(1 for _ in self._cpg.edges(kind=EdgeKind.CALLS))
+                - call_count_before
+            )
+            total_calls = sum(
+                1 for _ in self._cpg.nodes(kind=NodeKind.CALL)
+            )
+            elapsed = time.monotonic() - t0
+            self._report(
+                "Call resolution",
+                f"done ({elapsed:.1f}s, {calls_resolved}/{total_calls} calls resolved)",
+            )
+            self._check_timeout("Call resolution")
 
-        # Phase 5: Inter-procedural DFG — propagate data flow across calls
+        # Inter-procedural DFG — propagate data flow across calls
+        t0 = time.monotonic()
         self._build_interprocedural_dfg()
+        elapsed = time.monotonic() - t0
+        self._report("Inter-procedural DFG", f"done ({elapsed:.1f}s)")
 
         # Clear tree-sitter node references now that build is complete
         for cpg_node in self._cpg._nodes.values():
@@ -579,6 +652,7 @@ class CPGBuilder:
 
         Returns the same CodePropertyGraph instance, updated in place.
         """
+        self._build_start = time.monotonic()
         registry = self._get_registry()
 
         # Determine which files changed
@@ -613,6 +687,7 @@ class CPGBuilder:
         self._purge_cross_file_edges()
 
         # Re-parse changed files (if they still exist)
+        t0 = time.monotonic()
         for file_path in changed_paths:
             if file_path.exists():
                 self._process_file(file_path, registry)
@@ -623,16 +698,44 @@ class CPGBuilder:
 
         for source_bytes, filename, language in new_sources:
             self._process_source(source_bytes, filename, language, registry)
+        elapsed = time.monotonic() - t0
+        file_count = len(changed_paths) + len(new_files) + len(new_sources)
+        self._report("Parse", f"done ({elapsed:.1f}s, {file_count} files re-parsed)")
+        self._check_timeout("Parse")
 
         # Rebuild CFG for changed/new files only
+        t0 = time.monotonic()
         self._build_cfg_for_files(changed_posix)
+        elapsed = time.monotonic() - t0
+        self._report("CFG", f"done ({elapsed:.1f}s, {len(changed_posix)} files)")
+        self._check_timeout("CFG")
 
         # Re-run call resolution globally (conservative)
         if registry is not None:
+            t0 = time.monotonic()
+            call_count_before = sum(
+                1 for _ in self._cpg.edges(kind=EdgeKind.CALLS)
+            )
             self._resolve_calls(registry)
+            calls_resolved = (
+                sum(1 for _ in self._cpg.edges(kind=EdgeKind.CALLS))
+                - call_count_before
+            )
+            total_calls = sum(
+                1 for _ in self._cpg.nodes(kind=NodeKind.CALL)
+            )
+            elapsed = time.monotonic() - t0
+            self._report(
+                "Call resolution",
+                f"done ({elapsed:.1f}s, {calls_resolved}/{total_calls} calls resolved)",
+            )
+            self._check_timeout("Call resolution")
 
         # Re-run inter-procedural DFG globally
+        t0 = time.monotonic()
         self._build_interprocedural_dfg()
+        elapsed = time.monotonic() - t0
+        self._report("Inter-procedural DFG", f"done ({elapsed:.1f}s)")
 
         # Clear tree-sitter references on new nodes
         for cpg_node in self._cpg._nodes.values():
@@ -746,15 +849,49 @@ class CPGBuilder:
                         ))
 
     def _resolve_calls(self, registry: Any) -> None:
-        """Run call resolution for all registered visitors."""
+        """Run call resolution for all registered visitors.
+
+        CALL nodes are partitioned by file extension so each visitor only
+        resolves calls from its own language (preventing duplicates and
+        applying language-specific disambiguation).
+
+        FUNCTION nodes are shared across all visitors — a call in any
+        language can resolve to a function defined in any file.  This
+        avoids lost resolution for cross-language references (e.g. C++
+        calling C via headers, TypeScript importing JavaScript modules).
+        """
+        # One shared function list for all visitors to search
+        all_functions = list(self._cpg.nodes(kind=NodeKind.FUNCTION))
+
+        # Partition CALL nodes by file extension — each call is resolved
+        # by exactly one visitor (the one that owns the call's language)
+        calls_by_ext: dict[str, list[CpgNode]] = {}
+        for n in self._cpg.nodes(kind=NodeKind.CALL):
+            if n.location is not None:
+                ext = n.location.file.suffix
+                calls_by_ext.setdefault(ext, []).append(n)
+
         seen: set[str] = set()
         for ext in registry.supported_extensions():
             visitor = registry.get_visitor(ext)
             if visitor is None or visitor.name in seen:
                 continue
             seen.add(visitor.name)
+
+            # Collect only this visitor's CALL nodes
+            visitor_calls: list[CpgNode] = []
+            for v_ext in visitor.extensions:
+                visitor_calls.extend(calls_by_ext.get(v_ext, []))
+
+            if not visitor_calls:
+                continue  # Nothing to resolve for this language
+
             try:
-                visitor.resolve_calls(self._cpg)
+                visitor.resolve_calls(
+                    self._cpg,
+                    function_nodes=all_functions,
+                    call_nodes=visitor_calls,
+                )
             except Exception as e:
                 warnings.warn(
                     f"Call resolution failed for {visitor.name}: {e}",

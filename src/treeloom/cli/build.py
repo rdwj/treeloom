@@ -10,7 +10,7 @@ from pathlib import Path
 from treeloom.cli._util import err, write_output
 from treeloom.cli.config import Config
 from treeloom.export.json import to_json
-from treeloom.graph.builder import _DEFAULT_EXCLUDES, CPGBuilder
+from treeloom.graph.builder import BuildProgressCallback, BuildTimeoutError, _DEFAULT_EXCLUDES, CPGBuilder
 from treeloom.lang.registry import LanguageRegistry
 
 
@@ -31,6 +31,10 @@ def register(subparsers: argparse._SubParsersAction) -> None:  # type: ignore[ty
         "--language", action="append", default=None, metavar="LANG", dest="languages",
         help="Only process files for this language (repeatable, e.g. python, javascript)",
     )
+    p.add_argument(
+        "--timeout", type=float, default=None, metavar="SECONDS",
+        help="Abort build if it exceeds this many seconds",
+    )
     p.set_defaults(func=run_build)
 
 
@@ -44,6 +48,7 @@ def run_build(args: argparse.Namespace, cfg: Config) -> int:
     exclude = (args.exclude or []) + cfg.exclude_patterns
     show_progress: bool = getattr(args, "progress", False)
     languages: list[str] | None = getattr(args, "languages", None)
+    timeout: float | None = getattr(args, "timeout", None)
 
     registry = LanguageRegistry.default()
 
@@ -60,7 +65,13 @@ def run_build(args: argparse.Namespace, cfg: Config) -> int:
             exts.update(visitor.extensions)
         lang_extensions = frozenset(exts)
 
-    builder = CPGBuilder(registry=registry)
+    # Progress callback for --progress
+    progress_cb: BuildProgressCallback | None = None
+    if show_progress:
+        def progress_cb(phase: str, detail: str) -> None:
+            print(f"  {phase}: {detail}", file=sys.stderr)
+
+    builder = CPGBuilder(registry=registry, progress=progress_cb, timeout=timeout)
 
     if path.is_file():
         if show_progress:
@@ -86,7 +97,12 @@ def run_build(args: argparse.Namespace, cfg: Config) -> int:
     else:
         builder.add_directory(path, exclude=exclude)
 
-    cpg = builder.build()
+    try:
+        cpg = builder.build()
+    except BuildTimeoutError as exc:
+        err(str(exc))
+        err("Hint: try building per-directory or increase --timeout.")
+        return 1
     json_text = to_json(cpg)
     write_output(json_text, output)
 

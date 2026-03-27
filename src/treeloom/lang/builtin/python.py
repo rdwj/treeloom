@@ -62,7 +62,11 @@ class PythonVisitor(TreeSitterVisitor):
         ctx.scope_stack.pop()
 
     def resolve_calls(
-        self, cpg: CodePropertyGraph
+        self,
+        cpg: CodePropertyGraph,
+        *,
+        function_nodes: list[CpgNode] | None = None,
+        call_nodes: list[CpgNode] | None = None,
     ) -> list[tuple[NodeId, NodeId]]:
         """Link CALL nodes to FUNCTION definitions.
 
@@ -70,7 +74,7 @@ class PythonVisitor(TreeSitterVisitor):
         falling back to name-based matching for plain function calls.
         """
         functions: dict[str, list[CpgNode]] = {}
-        for n in cpg.nodes(kind=NodeKind.FUNCTION):
+        for n in (function_nodes if function_nodes is not None else cpg.nodes(kind=NodeKind.FUNCTION)):
             functions.setdefault(n.name, []).append(n)
 
         # Build class hierarchy and method index for type-based resolution
@@ -79,14 +83,14 @@ class PythonVisitor(TreeSitterVisitor):
             class_nodes[n.name] = n
 
         method_index: dict[tuple[str, str], CpgNode] = {}
-        for fn in cpg.nodes(kind=NodeKind.FUNCTION):
+        for fn in (function_nodes if function_nodes is not None else cpg.nodes(kind=NodeKind.FUNCTION)):
             scope = cpg.scope_of(fn.id)
             if scope is not None and scope.kind == NodeKind.CLASS:
                 method_index[(scope.name, fn.name)] = fn
 
         resolved: list[tuple[NodeId, NodeId]] = []
 
-        for call_node in cpg.nodes(kind=NodeKind.CALL):
+        for call_node in (call_nodes if call_nodes is not None else cpg.nodes(kind=NodeKind.CALL)):
             target = call_node.name
             fn: CpgNode | None = None
 

@@ -8,7 +8,7 @@ from typing import TYPE_CHECKING, Any, Protocol, runtime_checkable
 if TYPE_CHECKING:
     from treeloom.graph.cpg import CodePropertyGraph
     from treeloom.model.location import SourceLocation
-    from treeloom.model.nodes import NodeId
+    from treeloom.model.nodes import CpgNode, NodeId
 
 
 @runtime_checkable
@@ -138,9 +138,18 @@ class LanguageVisitor(Protocol):
         ...
 
     def resolve_calls(
-        self, cpg: CodePropertyGraph
+        self,
+        cpg: CodePropertyGraph,
+        *,
+        function_nodes: list[CpgNode] | None = None,
+        call_nodes: list[CpgNode] | None = None,
     ) -> list[tuple[NodeId, NodeId]]:
         """Link call sites to function definitions.
+
+        When *function_nodes* and *call_nodes* are provided, the visitor
+        should iterate only over those pre-filtered lists instead of
+        scanning the full CPG.  This avoids O(V*N) full-graph scans in
+        multi-language builds.
 
         Returns a list of (call_site_id, function_definition_id) pairs.
         Unresolved calls are simply omitted from the result.

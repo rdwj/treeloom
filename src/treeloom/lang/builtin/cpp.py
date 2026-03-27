@@ -58,15 +58,19 @@ class CppVisitor(TreeSitterVisitor):
         ctx.scope_stack.pop()
 
     def resolve_calls(
-        self, cpg: CodePropertyGraph
+        self,
+        cpg: CodePropertyGraph,
+        *,
+        function_nodes: list[CpgNode] | None = None,
+        call_nodes: list[CpgNode] | None = None,
     ) -> list[tuple[NodeId, NodeId]]:
         """Link CALL nodes to FUNCTION definitions by name matching."""
         functions: dict[str, list[CpgNode]] = {}
-        for n in cpg.nodes(kind=NodeKind.FUNCTION):
+        for n in (function_nodes if function_nodes is not None else cpg.nodes(kind=NodeKind.FUNCTION)):
             functions.setdefault(n.name, []).append(n)
 
         resolved: list[tuple[NodeId, NodeId]] = []
-        for call_node in cpg.nodes(kind=NodeKind.CALL):
+        for call_node in (call_nodes if call_nodes is not None else cpg.nodes(kind=NodeKind.CALL)):
             target = call_node.name
             fn = _resolve_single_call(call_node, target, functions, cpg)
             if fn is None and "." in target:
