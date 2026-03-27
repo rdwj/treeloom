@@ -254,7 +254,12 @@ Fluent builder for constructing a CPG from source files. Implements `NodeEmitter
 
 ```python
 class CPGBuilder:
-    def __init__(self, registry: LanguageRegistry | None = None) -> None
+    def __init__(
+        self,
+        registry: LanguageRegistry | None = None,
+        progress: BuildProgressCallback | None = None,
+        timeout: float | None = None,
+    ) -> None
     def add_file(self, path: Path) -> CPGBuilder
     def add_directory(self, path: Path, exclude: list[str] | None = None) -> CPGBuilder
     def add_source(self, source: bytes, filename: str, language: str) -> CPGBuilder
@@ -266,8 +271,10 @@ class CPGBuilder:
 1. **Parse phase**: For each file, select the language visitor by file extension from the `LanguageRegistry`. Call `visitor.parse(source_bytes, filename)` to get a tree-sitter parse tree. Skip files whose parse tree has `root_node.has_error` (emit a warning).
 2. **Visit phase**: For each parsed file, call `visitor.visit(tree, file_path, emitter)`. The visitor walks the tree and calls emitter methods to emit nodes and edges. This produces: AST nodes + CONTAINS/HAS_PARAMETER edges + intra-procedural DFG edges (DEFINED_BY, USED_BY, DATA_FLOWS_TO within a function).
 3. **CFG phase**: For each FUNCTION node, construct control flow edges (FLOWS_TO, BRANCHES_TO) between its child statements/blocks. This is language-agnostic — the visitor has already emitted the structural nodes; the builder connects them in statement order, with branches at BRANCH/LOOP nodes.
-4. **Call resolution phase**: Call `visitor.resolve_calls(cpg)` for each language visitor to link CALL nodes to FUNCTION nodes with CALLS edges. Resolution is best-effort: unresolved calls remain as orphan CALL nodes (no CALLS edge).
+4. **Call resolution phase**: Call `visitor.resolve_calls(cpg, function_nodes=..., call_nodes=...)` for each language visitor to link CALL nodes to FUNCTION nodes with CALLS edges. The builder partitions CALL nodes by file extension (each visitor resolves only its own language's calls) but shares all FUNCTION nodes across visitors (so cross-language calls can resolve). Resolution is best-effort: unresolved calls remain as orphan CALL nodes (no CALLS edge).
 5. **Inter-procedural DFG phase**: Compute function summaries via `compute_summaries(cpg)`. For each call site with a resolved target, propagate DATA_FLOWS_TO edges across the call boundary using the summary (argument N flows to parameter N, return value flows to call site).
+
+The `progress` callback, if provided, is invoked between phases with `(phase_name, detail_string)`. Phase names are `"Parse"`, `"CFG"`, `"Call resolution"`, `"Inter-procedural DFG"`. The `timeout` parameter sets a wall-clock seconds limit; `BuildTimeoutError` is raised if the timeout is exceeded between phases.
 
 **NodeId generation**: The builder generates IDs in the format `"{kind}:{file}:{line}:{col}:{counter}"` where counter disambiguates multiple nodes at the same location. Consumers must treat NodeId as opaque.
 
@@ -480,8 +487,17 @@ class LanguageVisitor(Protocol):
     def visit(self, tree: Any, file_path: Path, emitter: NodeEmitter) -> None: ...
     # Walk the tree and emit nodes/edges via the emitter
 
-    def resolve_calls(self, cpg: CodePropertyGraph) -> list[tuple[NodeId, NodeId]]: ...
+    def resolve_calls(
+        self,
+        cpg: CodePropertyGraph,
+        *,
+        function_nodes: list[CpgNode] | None = None,
+        call_nodes: list[CpgNode] | None = None,
+    ) -> list[tuple[NodeId, NodeId]]: ...
     # Returns list of (call_site_id, function_definition_id) pairs
+    # When function_nodes/call_nodes are provided, visitors iterate these
+    # pre-filtered lists instead of scanning the full CPG (avoids O(V*N)
+    # full-graph scans in multi-language builds).
 ```
 
 ## NodeEmitter Protocol (`lang/protocol.py`)
@@ -864,7 +880,7 @@ from treeloom.model.location import SourceLocation, SourceRange
 from treeloom.model.nodes import NodeId, NodeKind, CpgNode
 from treeloom.model.edges import EdgeKind, CpgEdge
 from treeloom.graph.cpg import CodePropertyGraph
-from treeloom.graph.builder import CPGBuilder
+from treeloom.graph.builder import CPGBuilder, BuildProgressCallback, BuildTimeoutError
 from treeloom.analysis.taint import TaintPolicy, TaintLabel, TaintResult, TaintPath, TaintPropagator
 from treeloom.query.api import GraphQuery
 from treeloom.query.pattern import ChainPattern, StepMatcher

@@ -1,6 +1,6 @@
 # treeloom
 
-> Language-agnostic Code Property Graph library for Python. Parses source code via tree-sitter, builds a unified graph (AST + control flow + data flow + call graph), and provides taint analysis, pattern matching, and visualization. Supports Python, JavaScript, TypeScript, Go, Java, C, C++, and Rust. 888 tests. Current version: 0.3.0.
+> Language-agnostic Code Property Graph library for Python. Parses source code via tree-sitter, builds a unified graph (AST + control flow + data flow + call graph), and provides taint analysis, pattern matching, and visualization. Supports Python, JavaScript, TypeScript, Go, Java, C, C++, and Rust. 1123 tests. Latest release: 0.3.0 (main branch includes additional unreleased features).
 
 All public types are importable from the top-level `treeloom` package.
 
@@ -17,7 +17,7 @@ Building and analyzing a CPG follows four steps:
 
 All operations are available from the `treeloom` command:
 
-- `build` — Parse source files and write a CPG JSON file (`--progress`, `--language`, `--exclude`)
+- `build` — Parse source files and write a CPG JSON file (`--progress`, `--language`, `--exclude`, `--timeout`)
 - `info` — Display node/edge count statistics for a CPG JSON file
 - `query` — Filter nodes by kind/name/file/scope/annotation (`--output-format`, `--count`, `--limit`)
 - `edges` — Filter edges by kind/source/target (`--output-format`, `--limit`)
@@ -41,8 +41,8 @@ All operations are available from the `treeloom` command:
 
 ## Key Types
 
-- `CPGBuilder`: Fluent builder with `add_file()`, `add_directory()`, `add_source()`, `build()`
-- `CodePropertyGraph`: Central graph object with node/edge access, annotations, `taint()`, `query()`, `to_dict()`/`from_dict()`
+- `CPGBuilder`: Fluent builder with `add_file()`, `add_directory()`, `add_source()`, `build()`, `rebuild(changed=...)`
+- `CodePropertyGraph`: Central graph object with node/edge access, annotations, `taint()`, `query()`, `to_dict()`/`from_dict()`, `remove_node()`, `remove_edge()`, `nodes_for_file()`
 - `NodeKind`: Enum -- MODULE, CLASS, FUNCTION, PARAMETER, VARIABLE, CALL, LITERAL, RETURN, IMPORT, BRANCH, LOOP, BLOCK
 - `EdgeKind`: Enum -- CONTAINS, HAS_PARAMETER, HAS_RETURN_TYPE, FLOWS_TO, BRANCHES_TO, DATA_FLOWS_TO, DEFINED_BY, USED_BY, CALLS, RESOLVES_TO, IMPORTS
 - `CpgNode`: Dataclass with `id: NodeId`, `kind: NodeKind`, `name: str`, `location: SourceLocation | None`, `scope: NodeId | None`, `attrs: dict`
@@ -50,6 +50,7 @@ All operations are available from the `treeloom` command:
 - `TaintPolicy`: Consumer-provided callbacks -- `sources(node) -> TaintLabel | None`, `sinks(node) -> bool`, `sanitizers(node) -> bool`; `implicit_param_sources: bool = False` auto-seeds all PARAMETER nodes as taint sources
 - `TaintResult`: Contains `paths: list[TaintPath]` with methods `unsanitized_paths()`, `sanitized_paths()`, `paths_to_sink()`, `labels_at()`, `apply_to(cpg)`, `edge_labels(source, target) -> frozenset[TaintLabel]`
 - `FunctionSummary` / `compute_summaries`: Per-function summary of which parameters flow to return values; used by the taint engine for inter-procedural analysis
+- `load_models` / `list_builtin_models` / `load_model_file`: Load YAML-based stdlib propagation models that return `TaintPropagator` instances for `TaintPolicy.propagators`
 - `forward_reachable` / `backward_reachable`: BFS reachability helpers (edge-kind-filtered) exported from `treeloom.analysis.reachability`
 - `GraphQuery`: Path queries (`paths_between`, `reachable_from`, `reaching`, `paths_to_sink`), node lookup (`node_at`, `nodes_in_file`), pattern matching (`match_chain`)
 - `ChainPattern` / `StepMatcher`: Declarative pattern matching with wildcard support and edge-kind filtering
@@ -72,6 +73,11 @@ All operations are available from the `treeloom` command:
 - **Diff defaults to basename matching**: `treeloom diff` matches files by basename, so `bad/libuser.py` and `good/libuser.py` compare correctly. Use `--match-by-full-path` for exact path comparison.
 - **Only declared sinks appear in TaintResult.paths**: The engine records a `TaintPath` only when taint reaches a node for which `policy.sinks(node)` returns True. Taint that propagates through intermediate nodes (e.g., assignments, function returns) does NOT produce a path entry. If you see unexpected functions like `print()` or `jsonify()` in results, your `sinks` callback is returning True for those nodes — narrow it. The engine itself is not at fault.
 - **Grammar packages are optional**: Core library works without them. Install `treeloom[languages]` for all grammars, or individual packages like `tree-sitter-python`.
+- **Stdlib propagation models**: `load_models(["python-stdlib"])` returns propagators for common stdlib functions. Pass them to `TaintPolicy(propagators=load_models(["python-stdlib"]))`. Use `list_builtin_models()` to see available model names.
+- **Incremental rebuild**: `CPGBuilder.rebuild(changed=[path])` only re-parses listed files. Pass `changed=None` for automatic SHA-256-based change detection. Annotations on unchanged nodes are preserved.
+- **Type inference is best-effort**: Python visitor tracks simple constructor assignments (`d = Dog()`) for `inferred_type` on VARIABLE nodes and `receiver_inferred_type` on CALL nodes. No cross-module tracking, no complex expression inference. Class `attrs["bases"]` lists base class names for MRO resolution.
+- **Field-sensitive taint**: `TaintLabel.field_path` (str | None) tracks which field is tainted. Object-level taint narrows to field-level when flowing through attribute access edges with `field_name` attrs. Falls back to object-level when ambiguous.
+- **emit_data_flow accepts attrs**: `emitter.emit_data_flow(src, tgt, field_name="x")` attaches metadata to DATA_FLOWS_TO edges. Used by field-sensitive taint tracking.
 
 ## Optional
 

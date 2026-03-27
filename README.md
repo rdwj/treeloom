@@ -6,7 +6,10 @@ A language-agnostic Code Property Graph (CPG) library for Python. treeloom parse
 
 - **Multi-language parsing** -- Python, JavaScript, TypeScript, Go, Java, C, C++, and Rust via tree-sitter grammars
 - **Unified graph model** -- AST structure, control flow, data flow, and call graphs in a single queryable graph
-- **Taint analysis** -- generic label-propagation engine for tracking data flow from sources to sinks, with sanitizer support
+- **Taint analysis** -- generic label-propagation engine for tracking data flow from sources to sinks, with sanitizer support and field-sensitive propagation
+- **Stdlib propagation models** -- YAML-based data flow models for Python stdlib (json, pickle, subprocess, os.path, etc.) loaded via `load_models()`
+- **Incremental rebuild** -- `CPGBuilder.rebuild()` re-parses only changed files, preserving unchanged nodes, edges, and annotations
+- **Type-aware call resolution** -- constructor tracking and MRO-based method dispatch for Python
 - **Pattern matching** -- chain-based pattern queries for finding code patterns across the graph
 - **Visualization** -- export to JSON, Graphviz DOT, or interactive HTML (Cytoscape.js)
 - **Consumer annotations** -- attach arbitrary metadata to nodes without modifying the structural graph
@@ -205,6 +208,20 @@ mypy src/treeloom/
 
 ## Changelog
 
+### Unreleased
+
+- Stdlib data flow propagation models: `load_models(["python-stdlib"])` returns `TaintPropagator` instances for json, pickle, os.path, subprocess, urllib.parse, base64, shlex, builtins, and string/dict methods. Also `list_builtin_models()` and `load_model_file()`. Models live in `src/treeloom/models/builtin/` as YAML.
+- Basic type inference for call resolution: Python visitor tracks constructor assignments (`d = Dog()`) and records `inferred_type` on VARIABLE nodes, `receiver_inferred_type` on CALL nodes. Class definitions get `attrs["bases"]`. Method calls with known receiver types resolve via MRO before name-matching fallback.
+- Incremental/delta-based CPG rebuild: `CPGBuilder.rebuild(changed=...)` re-parses only changed files; unchanged nodes, edges, and annotations are preserved. `CodePropertyGraph` gains `remove_node()` (cascading edge removal), `remove_edge()`, and `nodes_for_file()`. SHA-256 content hashing for auto change detection when `changed` is None.
+- Benchmark suite: pytest-benchmark based, synthetic Python at 500/2k/5k LOC exercising build, taint, JSON round-trip, and query. Memory tests via psutil.
+- Field-sensitive taint propagation: `TaintLabel.field_path` (str | None) distinguishes `obj.field_a` taint from `obj` taint. Attribute access edges with `field_name` attrs narrow object-level taint to field-level; mismatching fields filtered. `emit_data_flow` now accepts `**attrs`.
+- Non-Python language visitor fixture tests: data_flow, cross_function_taint, method_calls, nested_scopes fixtures for JS, Go, TS, Rust, C, C++. Fixed Go visitor bug with missing DATA_FLOWS_TO for reassignments and parameter DFG.
+- Language-filtered call resolution: build no longer hangs on large multi-language repos. CALL nodes are partitioned by language during resolution while FUNCTION nodes remain shared across visitors.
+- Build progress callbacks: `CPGBuilder(progress=callback)` accepts a `BuildProgressCallback` callable that receives per-phase status and timing. New public type `BuildProgressCallback`.
+- Build timeout: `CPGBuilder(timeout=seconds)` aborts a stalled build with `BuildTimeoutError`. Exposed as `--timeout` CLI flag. New public type `BuildTimeoutError`.
+- `LanguageVisitor.resolve_calls()` now accepts optional `function_nodes` and `call_nodes` kwargs for pre-filtered node sets, enabling the language-filtered resolution path.
+- 1123 tests
+
 ### Version 0.3.0
 
 - `TaintPolicy.implicit_param_sources`: treat function parameters as automatic taint sources (#54)
@@ -212,7 +229,7 @@ mypy src/treeloom/
 - `GraphQuery.paths_to_sink()`: backward traversal from a sink to find all reaching source paths (#57)
 - Inter-procedural taint integration tests: verified 3-function call chain propagation (#55)
 - Fixed sanitizer convergence: paths through different sanitizers no longer falsely marked unsanitized
-- 888 tests
+- 888 tests (now 1123 on main)
 
 ### Version 0.2.7
 

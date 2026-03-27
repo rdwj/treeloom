@@ -1,6 +1,6 @@
 # treeloom
 
-> Language-agnostic Code Property Graph library for Python. Parses source code via tree-sitter, builds a unified graph (AST + control flow + data flow + call graph), and provides taint analysis, pattern matching, and visualization. Supports Python, JavaScript, TypeScript, Go, Java, C, C++, and Rust. 888 tests. Current version: 0.3.0.
+> Language-agnostic Code Property Graph library for Python. Parses source code via tree-sitter, builds a unified graph (AST + control flow + data flow + call graph), and provides taint analysis, pattern matching, and visualization. Supports Python, JavaScript, TypeScript, Go, Java, C, C++, and Rust. 1123 tests. Latest release: 0.3.0 (main branch includes additional unreleased features).
 
 All public types are importable from the top-level `treeloom` package. Install with `pip install treeloom[languages]` for all grammar packages, or `pip install treeloom` for core only (no parsing without grammars).
 
@@ -8,7 +8,10 @@ All public types are importable from the top-level `treeloom` package. Install w
 
 ```python
 from pathlib import Path
-from treeloom import CPGBuilder, TaintPolicy, TaintLabel, NodeKind, to_json, from_json, generate_html
+from treeloom import (
+    CPGBuilder, BuildProgressCallback, BuildTimeoutError,
+    TaintPolicy, TaintLabel, NodeKind, to_json, from_json, generate_html,
+)
 
 # 1. Build
 cpg = CPGBuilder().add_directory(Path("src/")).build()
@@ -37,12 +40,22 @@ html = generate_html(cpg, title="My CPG")      # self-contained HTML with Cytosc
 
 ```python
 class CPGBuilder:
-    def __init__(self, registry: LanguageRegistry | None = None) -> None
+    def __init__(
+        self,
+        registry: LanguageRegistry | None = None,
+        progress: BuildProgressCallback | None = None,
+        timeout: float | None = None,
+    ) -> None
     def add_file(self, path: Path) -> CPGBuilder
     def add_directory(self, path: Path, exclude: list[str] | None = None) -> CPGBuilder
     def add_source(self, source: bytes, filename: str, language: str | None = None) -> CPGBuilder
     def build(self) -> CodePropertyGraph
+    def rebuild(self, changed: list[Path] | None = None) -> CodePropertyGraph
 ```
+
+`progress` is a `BuildProgressCallback` (`Callable[[str, str], None]`) called at phase boundaries (e.g., parse, visit, CFG, call resolution). `timeout` limits wall-clock build time in seconds; raises `BuildTimeoutError` if exceeded. Both `BuildProgressCallback` and `BuildTimeoutError` are exported from the top-level `treeloom` package.
+
+`rebuild(changed=...)` re-parses only the listed files, removing their old nodes/edges and re-visiting them. Unchanged nodes, edges, and annotations are preserved. When `changed` is None, uses SHA-256 content hashing to auto-detect which files changed since the last build. The watch command uses incremental rebuild.
 
 Default directory exclusions: `__pycache__`, `node_modules`, `.git`, `venv`, `.venv`. The `exclude` parameter accepts gitignore-style patterns.
 
@@ -71,6 +84,11 @@ class CodePropertyGraph:
     def get_annotation(self, node_id: NodeId, key: str) -> Any | None
     def get_edge_annotation(self, source: NodeId, target: NodeId, key: str) -> Any | None
     def annotations_for(self, node_id: NodeId) -> dict[str, Any]
+
+    # Mutation (for incremental rebuild)
+    def remove_node(self, node_id: NodeId) -> None        # cascading: also removes all edges touching this node
+    def remove_edge(self, source: NodeId, target: NodeId, kind: EdgeKind | None = None) -> None
+    def nodes_for_file(self, file: Path) -> list[NodeId]   # all node IDs originating from the given source file
 
     # Analysis
     def query(self) -> GraphQuery
@@ -158,8 +176,9 @@ Common CpgNode.attrs keys by kind:
 |----------|-------------|
 | FUNCTION | is_async, is_method, is_static, decorators (list of strings) |
 | PARAMETER | type_annotation, position, default_value |
-| VARIABLE | type_annotation, is_global, is_field |
-| CALL | args_count, is_method_call, receiver |
+| VARIABLE | type_annotation, is_global, is_field, inferred_type (from constructor assignments, e.g. `"Dog"`) |
+| CALL | args_count, is_method_call, receiver, receiver_inferred_type (from type inference, e.g. `"Dog"`) |
+| CLASS | bases (list of base class name strings, e.g. `["Animal"]`) |
 | LITERAL | literal_type (str/int/float/bool/none), raw_value |
 | IMPORT | module, names, is_from, alias |
 | BRANCH | branch_type (if/elif/switch/match), has_else |
@@ -172,7 +191,8 @@ Common CpgNode.attrs keys by kind:
 class TaintLabel:
     name: str           # e.g. "user_input", "env_var"
     origin: NodeId      # the node that introduced this taint
-    attrs: dict         # consumer metadata (excluded from hash/eq)
+    field_path: str | None = None  # e.g. "password" for field-sensitive taint on obj.password
+    attrs: dict         # consumer metadata (excluded from hash/eq, default_factory=dict)
 
 @dataclass
 class TaintPolicy:
@@ -187,6 +207,7 @@ class TaintPropagator:
     match: Callable[[CpgNode], bool]
     param_to_return: bool = True
     param_to_param: dict[int, int] | None = None
+    params_to_return: list[int] | None = None  # specific param positions; takes precedence over param_to_return
 
 @dataclass
 class TaintPath:
@@ -210,6 +231,8 @@ class TaintResult:
 ```
 
 The taint engine uses worklist-based forward analysis over DATA_FLOWS_TO edges. Sanitizers mark paths as sanitized but do not stop propagation. Inter-procedural flow uses function summaries computed from param-to-return DFG paths. When `implicit_param_sources=True`, all PARAMETER nodes are automatically seeded as taint sources with labels of the form `param:{name}`.
+
+**Field-sensitive propagation**: When `TaintLabel.field_path` is set, the engine tracks taint at the field level. When taint flows through a DATA_FLOWS_TO edge that has a `field_name` attr (from attribute access), object-level taint narrows to field-level. Mismatching fields are filtered out. Falls back to object-level propagation when field information is ambiguous.
 
 **Stamping taint onto the graph**: After running taint, call `result.apply_to(cpg)` to annotate every tainted node/edge in the CPG. This makes the graph self-describing — any node inspection, subgraph extraction, or serialization carries taint status:
 
@@ -235,6 +258,31 @@ def compute_summaries(cpg: CodePropertyGraph) -> dict[NodeId, FunctionSummary]
 ```
 
 Summaries are computed once per `build()` and cached. They enable inter-procedural taint without full function inlining. Both `FunctionSummary` and `compute_summaries` are exported from the top-level `treeloom` package.
+
+## Stdlib Propagation Models
+
+```python
+from treeloom import load_models, list_builtin_models, load_model_file
+
+# Load all Python stdlib propagators
+propagators = load_models(["python-stdlib"])
+
+# Use in a taint policy
+policy = TaintPolicy(
+    sources=my_sources,
+    sinks=my_sinks,
+    sanitizers=my_sanitizers,
+    propagators=propagators,
+)
+
+# See available model names
+names = list_builtin_models()  # e.g. ["python-stdlib"]
+
+# Load a specific YAML model file
+propagators = load_model_file(Path("custom-models.yaml"))
+```
+
+Models are YAML files in `src/treeloom/models/builtin/`. The `python-stdlib` model covers: json, pickle, os.path, subprocess, urllib.parse, base64, shlex, builtins, and string/dict methods. Each model entry maps a function name to `TaintPropagator` fields (param_to_return, param_to_param). All three functions are exported from the top-level `treeloom` package.
 
 ## Reachability
 
@@ -376,6 +424,7 @@ All CLI operations work on CPG JSON files produced by `treeloom build`. Output f
 treeloom build src/ -o cpg.json
 treeloom build src/ -o cpg.json --progress --language python --language java
 treeloom build src/ -o cpg.json --exclude "**/*.generated.py"
+treeloom build src/ -o cpg.json --progress --timeout 300
 ```
 
 `treeloom info` -- display node/edge statistics:
@@ -562,3 +611,8 @@ edge_kind: data_flows_to     # optional; omit to traverse all edge types
 - **Grammar packages are optional**: Core library works without them. Missing grammars produce clear ImportError messages, not crashes.
 - **No network calls**: treeloom is fully offline. No telemetry, no downloads at runtime.
 - **Backend-agnostic**: The public API never leaks NetworkX types. All return types are treeloom's own dataclasses and Python builtins.
+- **Stdlib propagation models**: `load_models(["python-stdlib"])` returns `TaintPropagator` instances for common stdlib functions. Pass to `TaintPolicy(propagators=...)`. Use `list_builtin_models()` to discover available model names. Models are YAML in `src/treeloom/models/builtin/`.
+- **Incremental rebuild**: `CPGBuilder.rebuild(changed=[path])` re-parses only listed files; pass `changed=None` for automatic SHA-256-based change detection. `remove_node()` cascades to remove all touching edges. Annotations on unchanged nodes are preserved across rebuilds.
+- **Type inference is best-effort**: Python visitor tracks simple constructor assignments (`d = Dog()`) and sets `inferred_type` on VARIABLE nodes, `receiver_inferred_type` on CALL nodes. Class `attrs["bases"]` lists base class names for MRO-based method resolution. No cross-module tracking, no complex expression inference, flat type map only.
+- **Field-sensitive taint via TaintLabel.field_path**: When set, the engine narrows object-level taint to field-level when flowing through attribute access edges (DATA_FLOWS_TO with `field_name` attr). Mismatching fields are filtered. Falls back to object-level when ambiguous.
+- **emit_data_flow accepts keyword attrs**: `emitter.emit_data_flow(src, tgt, field_name="x")` attaches metadata to DATA_FLOWS_TO edges. Used internally for field-sensitive taint tracking.
