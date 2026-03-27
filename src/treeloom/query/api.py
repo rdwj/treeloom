@@ -52,6 +52,102 @@ class GraphQuery:
             result.append(node_path)  # type: ignore[arg-type]
         return result
 
+    def paths_to_sink(
+        self,
+        sink_id: NodeId,
+        edge_kinds: frozenset[EdgeKind] | None = None,
+        cutoff: int = 20,
+    ) -> list[list[CpgNode]]:
+        """Find all paths from any source node to *sink_id* via backward traversal.
+
+        A "source" in this context is any node with no incoming edges of the
+        specified *edge_kinds* within the reachable subgraph (i.e., a root
+        of the backward slice).
+
+        When *edge_kinds* is ``None``, all edge types are followed.  When
+        specified (e.g., ``frozenset({EdgeKind.DATA_FLOWS_TO})``), only those
+        edge types are considered.
+
+        Returns a list of paths, each a list of :class:`CpgNode` from source
+        to sink.  The *cutoff* limits path length to avoid combinatorial
+        explosion.
+        """
+        sink_str = str(sink_id)
+        if not self._cpg._backend.has_node(sink_str):  # noqa: SLF001
+            return []
+
+        # Backward BFS from sink, collecting all nodes that can reach the sink
+        # and building a forward adjacency map (node -> set of next nodes toward sink).
+        forward_neighbors: dict[str, set[str]] = {sink_str: set()}
+        depth_at: dict[str, int] = {sink_str: 0}
+        queue: deque[str] = deque([sink_str])
+
+        while queue:
+            current = queue.popleft()
+            current_depth = depth_at[current]
+            if current_depth >= cutoff:
+                continue
+
+            current_node = self._cpg.node(NodeId(current))
+            if current_node is None:
+                continue
+
+            if edge_kinds is None:
+                preds = self._cpg.predecessors(current_node.id)
+            else:
+                preds = []
+                for kind in edge_kinds:
+                    preds.extend(self._cpg.predecessors(current_node.id, edge_kind=kind))
+
+            for pred in preds:
+                pred_str = str(pred.id)
+                if pred_str not in forward_neighbors:
+                    forward_neighbors[pred_str] = set()
+                    depth_at[pred_str] = current_depth + 1
+                    queue.append(pred_str)
+                # pred -> current is a forward edge toward sink
+                forward_neighbors[pred_str].add(current)
+
+        # Identify sources: nodes in the reached set with no predecessors
+        # of the relevant kinds within the same reached set.
+        sources: list[str] = []
+        for nid_str in forward_neighbors:
+            if nid_str == sink_str:
+                continue
+            node = self._cpg.node(NodeId(nid_str))
+            if node is None:
+                continue
+            if edge_kinds is None:
+                preds_of_node = self._cpg.predecessors(node.id)
+            else:
+                preds_of_node = []
+                for kind in edge_kinds:
+                    preds_of_node.extend(self._cpg.predecessors(node.id, edge_kind=kind))
+            has_pred_in_subgraph = any(
+                str(p.id) in forward_neighbors for p in preds_of_node
+            )
+            if not has_pred_in_subgraph:
+                sources.append(nid_str)
+
+        # DFS from each source through forward_neighbors to reconstruct paths.
+        result: list[list[CpgNode]] = []
+        for src_str in sources:
+            stack: list[tuple[str, list[str]]] = [(src_str, [src_str])]
+            while stack:
+                current, path_so_far = stack.pop()
+                if current == sink_str:
+                    node_path = [self._cpg.node(NodeId(nid)) for nid in path_so_far]
+                    if all(n is not None for n in node_path):
+                        result.append(node_path)  # type: ignore[arg-type]
+                    continue
+                if len(path_so_far) > cutoff:
+                    continue
+                for next_str in forward_neighbors.get(current, set()):
+                    if next_str not in path_so_far:  # avoid cycles
+                        stack.append((next_str, path_so_far + [next_str]))
+
+        return result
+
     def reachable_from(
         self,
         node_id: NodeId,

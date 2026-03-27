@@ -54,12 +54,17 @@ class TaintPolicy:
         sinks: Returns True if the node is a sink.
         sanitizers: Returns True if the node sanitizes taint.
         propagators: Custom propagation rules for specific call patterns.
+        implicit_param_sources: When True, every PARAMETER node is automatically
+            treated as a taint source with label ``param:<name>``.  Explicit
+            sources defined by ``sources`` take precedence — parameters that are
+            already seeded by the explicit source callback are not overridden.
     """
 
     sources: Callable[[CpgNode], TaintLabel | None]
     sinks: Callable[[CpgNode], bool]
     sanitizers: Callable[[CpgNode], bool]
     propagators: list[TaintPropagator] = field(default_factory=list)
+    implicit_param_sources: bool = False
 
 
 @dataclass
@@ -82,6 +87,9 @@ class TaintResult:
     _labels_at: dict[str, frozenset[TaintLabel]] = field(
         default_factory=dict, repr=False
     )
+    _edge_labels: dict[tuple[str, str], frozenset[TaintLabel]] = field(
+        default_factory=dict, repr=False
+    )
 
     def paths_to_sink(self, sink_id: NodeId) -> list[TaintPath]:
         """Return all paths ending at the given sink."""
@@ -102,6 +110,10 @@ class TaintResult:
     def labels_at(self, node_id: NodeId) -> frozenset[TaintLabel]:
         """Return the set of taint labels that reached a given node."""
         return self._labels_at.get(str(node_id), frozenset())
+
+    def edge_labels(self, source: NodeId, target: NodeId) -> frozenset[TaintLabel]:
+        """Return the taint labels that flow along the edge from *source* to *target*."""
+        return self._edge_labels.get((str(source), str(target)), frozenset())
 
     def apply_to(self, cpg: CodePropertyGraph) -> None:
         """Stamp taint analysis results onto the graph as annotations.
@@ -142,14 +154,18 @@ class TaintResult:
             for s in path.sanitizers:
                 sanitizer_ids.add(str(s.id))
 
-            # Annotate edges along the path
+            # Annotate edges along the path with per-edge label granularity
             for i in range(len(path.intermediates) - 1):
                 src = path.intermediates[i].id
                 tgt = path.intermediates[i + 1].id
                 cpg.annotate_edge(src, tgt, "tainted", True)
+                edge_key = (str(src), str(tgt))
+                # Prefer per-edge labels; fall back to path-level labels
+                # for TaintResults constructed outside run_taint().
+                per_edge = self._edge_labels.get(edge_key, path.labels)
                 cpg.annotate_edge(
                     src, tgt, "taint_labels",
-                    sorted({lb.name for lb in path.labels}),
+                    sorted({lb.name for lb in per_edge}),
                 )
 
         # Set taint_role
@@ -214,10 +230,16 @@ def run_taint(cpg: CodePropertyGraph, policy: TaintPolicy) -> TaintResult:
     # Value: frozenset of sanitizer node ID strings seen on this origin's path.
     #
     # When two propagation paths from the same origin converge at a node, we
-    # take the INTERSECTION of their sanitizer sets.  An empty intersection
-    # means at least one path from that origin bypassed all sanitizers, so the
-    # taint is considered unsanitized at that node.
+    # take the INTERSECTION of their sanitizer sets.  This tells us which
+    # sanitizers are common to ALL routes (useful for the sanitizers field).
     sanitizers_on_path: dict[tuple[str, str], frozenset[str]] = {}
+
+    # Track whether any unsanitized (bypass) path from an origin reaches a
+    # node.  Used separately from sanitizers_on_path because the intersection
+    # of sanitizer sets can be empty even when every individual path passes
+    # through some sanitizer (different sanitizers on different branches).
+    # True = a path with NO sanitizers reached this node from this origin.
+    has_bypass: dict[tuple[str, str], bool] = {}
 
     # (node_id_str, labels, sanitizers_carried)
     # The third element is the frozenset of sanitizer IDs seen so far on the
@@ -236,6 +258,27 @@ def run_taint(cpg: CodePropertyGraph, policy: TaintPolicy) -> TaintResult:
             source_nodes[nid] = node
             parent[nid] = set()
             sanitizers_on_path[(nid, nid)] = frozenset()
+            has_bypass[(nid, nid)] = True  # Source starts unsanitized
+
+    # Seed implicit parameter sources
+    if policy.implicit_param_sources:
+        for node in cpg.nodes(kind=NodeKind.PARAMETER):
+            nid = str(node.id)
+            if nid in labels_at:
+                continue  # Already an explicit source, don't override
+            label = TaintLabel(
+                name=f"param:{node.name}",
+                origin=node.id,
+            )
+            labels_at[nid] = frozenset({label})
+            worklist.append((nid, frozenset({label}), frozenset()))
+            source_nodes[nid] = node
+            parent[nid] = set()
+            sanitizers_on_path[(nid, nid)] = frozenset()
+            has_bypass[(nid, nid)] = True  # Source starts unsanitized
+
+    # Track which labels flow along each (source, target) edge.
+    edge_labels: dict[tuple[str, str], frozenset[TaintLabel]] = {}
 
     # -- Propagate ------------------------------------------------------------
     sink_hits: list[tuple[str, frozenset[TaintLabel]]] = []
@@ -285,7 +328,7 @@ def run_taint(cpg: CodePropertyGraph, policy: TaintPolicy) -> TaintResult:
                     origin_key = (str(label.origin), target_id)
                     existing = sanitizers_on_path.get(origin_key)
                     propagated = current_sanitizers
-                    if existing is None or len(propagated) < len(existing):
+                    if existing is None or not propagated.issuperset(existing):
                         needs_update = True
                         break
                 if not needs_update:
@@ -294,10 +337,16 @@ def run_taint(cpg: CodePropertyGraph, policy: TaintPolicy) -> TaintResult:
             labels_at[target_id] = new_labels
             parent.setdefault(target_id, set()).add(current_id)
 
-            # Update per-origin sanitizer tracking at the target node.
-            # Use intersection semantics: if two paths from the same origin
-            # converge here, the sanitizer set is the intersection.  This
-            # ensures that any bypass path (empty sanitizers) dominates.
+            # Track per-edge label flow
+            edge_key = (current_id, target_id)
+            existing_edge_labels = edge_labels.get(edge_key, frozenset())
+            edge_labels[edge_key] = existing_edge_labels | current_labels
+
+            # Update per-origin sanitizer and bypass tracking at the target.
+            # Intersection semantics for the sanitizer set (which sanitizers
+            # are common to ALL routes).  Bypass tracking is separate: if any
+            # route arrives with an empty sanitizer set, a bypass exists.
+            path_is_unsanitized = len(current_sanitizers) == 0
             for label in current_labels:
                 origin_key = (str(label.origin), target_id)
                 existing = sanitizers_on_path.get(origin_key)
@@ -305,6 +354,11 @@ def run_taint(cpg: CodePropertyGraph, policy: TaintPolicy) -> TaintResult:
                     sanitizers_on_path[origin_key] = current_sanitizers
                 else:
                     sanitizers_on_path[origin_key] = existing & current_sanitizers
+                # Track whether an unsanitized path exists
+                if path_is_unsanitized:
+                    has_bypass[origin_key] = True
+                elif origin_key not in has_bypass:
+                    has_bypass[origin_key] = False
 
             target_node = cpg.node(NodeId(target_id))
             if target_node is not None and policy.sinks(target_node):
@@ -342,17 +396,22 @@ def run_taint(cpg: CodePropertyGraph, policy: TaintPolicy) -> TaintResult:
                 if cpg.node(NodeId(s)) is not None
             ]
 
+            # is_sanitized is True when no unsanitized (bypass) path
+            # exists from this origin to the sink.  This is tracked
+            # separately from the sanitizer intersection because different
+            # branches can use different sanitizers and still be safe.
+            bypass_exists = has_bypass.get(origin_key, True)
             path = TaintPath(
                 source=source_node,
                 sink=sink_node,
                 intermediates=intermediates,
                 labels=frozenset({label}),
-                is_sanitized=len(sanitizer_cpg_nodes) > 0,
+                is_sanitized=not bypass_exists,
                 sanitizers=sanitizer_cpg_nodes,
             )
             paths.append(path)
 
-    return TaintResult(paths=paths, _labels_at=labels_at)
+    return TaintResult(paths=paths, _labels_at=labels_at, _edge_labels=edge_labels)
 
 
 def _reconstruct_path(

@@ -223,6 +223,90 @@ class TestSubgraph:
         assert ("c", "d") in edge_pairs
 
 
+class TestPathsToSink:
+    def test_simple_linear_path(self, linear_cpg: CodePropertyGraph) -> None:
+        """Single path A -> B -> C -> D (sink=D)."""
+        q = linear_cpg.query()
+        paths = q.paths_to_sink(
+            NodeId("d"), edge_kinds=frozenset({EdgeKind.DATA_FLOWS_TO})
+        )
+        assert len(paths) == 1
+        assert [str(n.id) for n in paths[0]] == ["a", "b", "c", "d"]
+
+    def test_multiple_sources(self, branching_cpg: CodePropertyGraph) -> None:
+        """param -> branch -> {left,right} -> sink; both branches reach sink."""
+        q = branching_cpg.query()
+        paths = q.paths_to_sink(
+            NodeId("sink"), edge_kinds=frozenset({EdgeKind.DATA_FLOWS_TO})
+        )
+        path_ids = {tuple(str(n.id) for n in p) for p in paths}
+        # Both paths from single source param should be found
+        assert ("param", "branch", "left", "sink") in path_ids
+        assert ("param", "branch", "right", "sink") in path_ids
+
+    def test_edge_kind_filtering(self, branching_cpg: CodePropertyGraph) -> None:
+        """Only BRANCHES_TO edges: left and right are sources, not param."""
+        q = branching_cpg.query()
+        paths = q.paths_to_sink(
+            NodeId("sink"), edge_kinds=frozenset({EdgeKind.BRANCHES_TO})
+        )
+        # BRANCHES_TO edges: branch->left, branch->right but left/right->sink
+        # use DATA_FLOWS_TO, so no paths should be found via BRANCHES_TO only.
+        assert paths == []
+
+    def test_no_path_to_sink(self) -> None:
+        """Sink exists but nothing reaches it."""
+        cpg = CodePropertyGraph()
+        sink = make_node(NodeKind.CALL, "sink", "sink")
+        cpg.add_node(sink)
+        q = cpg.query()
+        paths = q.paths_to_sink(
+            NodeId("sink"), edge_kinds=frozenset({EdgeKind.DATA_FLOWS_TO})
+        )
+        assert paths == []
+
+    def test_nonexistent_sink(self, linear_cpg: CodePropertyGraph) -> None:
+        """Requesting paths to a node that doesn't exist returns empty list."""
+        q = linear_cpg.query()
+        assert q.paths_to_sink(NodeId("nonexistent")) == []
+
+    def test_diamond_convergence(self) -> None:
+        """A -> B -> D and A -> C -> D: both paths should be found."""
+        cpg = CodePropertyGraph()
+        a = make_node(NodeKind.PARAMETER, "a", "a")
+        b = make_node(NodeKind.VARIABLE, "b", "b")
+        c = make_node(NodeKind.VARIABLE, "c", "c")
+        d = make_node(NodeKind.CALL, "sink", "d")
+        for node in [a, b, c, d]:
+            cpg.add_node(node)
+        from .conftest import add_edge
+        add_edge(cpg, "a", "b", EdgeKind.DATA_FLOWS_TO)
+        add_edge(cpg, "a", "c", EdgeKind.DATA_FLOWS_TO)
+        add_edge(cpg, "b", "d", EdgeKind.DATA_FLOWS_TO)
+        add_edge(cpg, "c", "d", EdgeKind.DATA_FLOWS_TO)
+
+        q = cpg.query()
+        paths = q.paths_to_sink(
+            NodeId("d"), edge_kinds=frozenset({EdgeKind.DATA_FLOWS_TO})
+        )
+        path_ids = {tuple(str(n.id) for n in p) for p in paths}
+        assert ("a", "b", "d") in path_ids
+        assert ("a", "c", "d") in path_ids
+        assert len(path_ids) == 2
+
+    def test_cutoff_limits_path_length(self, linear_cpg: CodePropertyGraph) -> None:
+        """cutoff=1 limits backward BFS to depth 1 from sink, so only c->d is found."""
+        q = linear_cpg.query()
+        paths = q.paths_to_sink(
+            NodeId("d"),
+            edge_kinds=frozenset({EdgeKind.DATA_FLOWS_TO}),
+            cutoff=1,
+        )
+        # Only c->d (1 edge) fits; a->b->c->d requires depth 3
+        assert len(paths) == 1
+        assert [str(n.id) for n in paths[0]] == ["c", "d"]
+
+
 class TestEmptyCPG:
     def test_paths_between_empty(self) -> None:
         cpg = CodePropertyGraph()
