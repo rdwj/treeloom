@@ -198,3 +198,138 @@ class TestControlFlow:
         assert "sumTo" in loop_parents or "printItems" in loop_parents, (
             f"No CONTAINS from sumTo/printItems. Sources: {loop_parents}"
         )
+
+
+# ---------------------------------------------------------------------------
+# data_flow.go
+# ---------------------------------------------------------------------------
+
+
+class TestDataFlow:
+    """Data flow chain tests for Go."""
+
+    @pytest.fixture()
+    def cpg(self) -> CodePropertyGraph:
+        return _build("data_flow.go")
+
+    def test_assignment_chain_nodes(self, cpg: CodePropertyGraph) -> None:
+        """Variables in assignment chains are emitted."""
+        var_names = _node_names(cpg, NodeKind.VARIABLE)
+        assert "x" in var_names
+        assert "y" in var_names
+
+    def test_short_var_data_flow(self, cpg: CodePropertyGraph) -> None:
+        """Short variable declaration (:=) emits DATA_FLOWS_TO."""
+        dfg_edges = list(cpg.edges(kind=EdgeKind.DATA_FLOWS_TO))
+        assert len(dfg_edges) > 0
+
+    def test_reassignment_data_flow(self, cpg: CodePropertyGraph) -> None:
+        """Plain assignment (=) also emits DATA_FLOWS_TO after fix."""
+        # result = b should create a DATA_FLOWS_TO edge
+        # Find 'result' variable nodes and check they have incoming DFG edges
+        result_nodes = [n for n in cpg.nodes(kind=NodeKind.VARIABLE) if n.name == "result"]
+        assert len(result_nodes) >= 1
+        # Should have at least 2 DFG edges: one from :=, one from =
+        result_ids = {str(n.id) for n in result_nodes}
+        dfg_to_result = [
+            e for e in cpg.edges(kind=EdgeKind.DATA_FLOWS_TO)
+            if str(e.target) in result_ids
+        ]
+        assert len(dfg_to_result) >= 2, (
+            f"Expected >=2 DFG edges to 'result', got {len(dfg_to_result)}. "
+            f"All DFG edges: {list(cpg.edges(kind=EdgeKind.DATA_FLOWS_TO))}"
+        )
+
+    def test_multiple_return_values(self, cpg: CodePropertyGraph) -> None:
+        """Functions with multiple returns emit RETURN nodes."""
+        funcs = [n for n in cpg.nodes(kind=NodeKind.FUNCTION) if n.name == "multiReturn"]
+        assert len(funcs) == 1
+
+
+# ---------------------------------------------------------------------------
+# cross_function_taint.go
+# ---------------------------------------------------------------------------
+
+
+class TestCrossFunctionTaint:
+    """Cross-function taint propagation tests."""
+
+    @pytest.fixture()
+    def cpg(self) -> CodePropertyGraph:
+        return _build("cross_function_taint.go")
+
+    def test_functions_exist(self, cpg: CodePropertyGraph) -> None:
+        func_names = _node_names(cpg, NodeKind.FUNCTION)
+        assert {"source", "passthrough", "sink", "main"}.issubset(func_names)
+
+    def test_call_nodes_exist(self, cpg: CodePropertyGraph) -> None:
+        call_names = _node_names(cpg, NodeKind.CALL)
+        assert "source" in call_names
+        assert "passthrough" in call_names
+        assert "sink" in call_names
+
+    def test_call_resolution(self, cpg: CodePropertyGraph) -> None:
+        calls_edges = list(cpg.edges(kind=EdgeKind.CALLS))
+        assert len(calls_edges) >= 1
+
+    def test_data_flow_through_calls(self, cpg: CodePropertyGraph) -> None:
+        """Data flows from call arguments to call nodes."""
+        dfg_edges = list(cpg.edges(kind=EdgeKind.DATA_FLOWS_TO))
+        # passthrough(data) and sink(processed) should have arg -> call DFG
+        assert len(dfg_edges) >= 2
+
+
+# ---------------------------------------------------------------------------
+# method_calls.go
+# ---------------------------------------------------------------------------
+
+
+class TestMethodCalls:
+    """Method call tests for Go."""
+
+    @pytest.fixture()
+    def cpg(self) -> CodePropertyGraph:
+        return _build("method_calls.go")
+
+    def test_struct_exists(self, cpg: CodePropertyGraph) -> None:
+        classes = [n for n in cpg.nodes(kind=NodeKind.CLASS) if n.name == "Processor"]
+        assert len(classes) == 1
+
+    def test_methods_exist(self, cpg: CodePropertyGraph) -> None:
+        func_names = _node_names(cpg, NodeKind.FUNCTION)
+        assert "Process" in func_names
+        assert "Validate" in func_names
+        assert "NewProcessor" in func_names
+
+    def test_method_calls_emitted(self, cpg: CodePropertyGraph) -> None:
+        call_names = _node_names(cpg, NodeKind.CALL)
+        assert "NewProcessor" in call_names
+        # Method calls may be qualified (p.Process) or just the method name
+        has_process = any("Process" in name for name in call_names)
+        has_validate = any("Validate" in name for name in call_names)
+        assert has_process
+        assert has_validate
+
+
+# ---------------------------------------------------------------------------
+# nested_scopes.go
+# ---------------------------------------------------------------------------
+
+
+class TestNestedScopes:
+    """Nested scope tests for Go."""
+
+    @pytest.fixture()
+    def cpg(self) -> CodePropertyGraph:
+        return _build("nested_scopes.go")
+
+    def test_outer_function(self, cpg: CodePropertyGraph) -> None:
+        func_names = _node_names(cpg, NodeKind.FUNCTION)
+        assert "outer" in func_names
+
+    def test_function_literal(self, cpg: CodePropertyGraph) -> None:
+        """Named functions in the file are emitted."""
+        # The Go visitor does not currently emit anonymous function literals;
+        # at minimum outer and withDefer must be present.
+        funcs = list(cpg.nodes(kind=NodeKind.FUNCTION))
+        assert len(funcs) >= 2

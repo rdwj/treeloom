@@ -182,13 +182,17 @@ class GoVisitor(TreeSitterVisitor):
         loc = self._location(node, ctx.file_path)
         scope = ctx.current_scope
 
-        params_node = node.child_by_field_name("parameters")
-        param_names = _extract_param_names(params_node, ctx.source) if params_node else []
-
-        func_id = ctx.emitter.emit_function(func_name, loc, scope, params=param_names)
+        # Emit the function without params so we can register each parameter's
+        # NodeId in defined_vars, enabling identifier lookups inside the body.
+        func_id = ctx.emitter.emit_function(func_name, loc, scope, params=None)
 
         ctx.scope_stack.append(func_id)
         ctx.defined_vars.push()
+
+        params_node = node.child_by_field_name("parameters")
+        if params_node is not None:
+            self._emit_params_into_defined_vars(params_node, func_id, ctx)
+
         body = node.child_by_field_name("body")
         if body is not None:
             self._visit_block(body, ctx)
@@ -211,18 +215,54 @@ class GoVisitor(TreeSitterVisitor):
         loc = self._location(node, ctx.file_path)
         scope = ctx.current_scope
 
-        params_node = node.child_by_field_name("parameters")
-        param_names = _extract_param_names(params_node, ctx.source) if params_node else []
-
-        func_id = ctx.emitter.emit_function(method_name, loc, scope, params=param_names)
+        # Emit the method without params so we can register each parameter's
+        # NodeId in defined_vars, enabling identifier lookups inside the body.
+        func_id = ctx.emitter.emit_function(method_name, loc, scope, params=None)
 
         ctx.scope_stack.append(func_id)
         ctx.defined_vars.push()
+
+        params_node = node.child_by_field_name("parameters")
+        if params_node is not None:
+            self._emit_params_into_defined_vars(params_node, func_id, ctx)
+
         body = node.child_by_field_name("body")
         if body is not None:
             self._visit_block(body, ctx)
         ctx.defined_vars.pop()
         ctx.scope_stack.pop()
+
+    def _emit_params_into_defined_vars(
+        self,
+        params_node: tree_sitter.Node,
+        func_id: NodeId,
+        ctx: _VisitContext,
+    ) -> None:
+        """Emit PARAMETER nodes and register their NodeIds in defined_vars.
+
+        This ensures that parameter names referenced inside the function body
+        resolve to their NodeIds when building data-flow edges.
+        """
+        position = 0
+        for child in params_node.children:
+            if child.type == "parameter_declaration":
+                identifiers = [c for c in child.children if c.type == "identifier"]
+                for id_node in identifiers:
+                    name = self._node_text(id_node, ctx.source)
+                    loc = self._location(id_node, ctx.file_path)
+                    param_id = ctx.emitter.emit_parameter(name, loc, func_id, position=position)
+                    ctx.defined_vars[name] = param_id
+                    position += 1
+            elif child.type == "variadic_parameter_declaration":
+                for id_node in child.children:
+                    if id_node.type == "identifier":
+                        name = self._node_text(id_node, ctx.source)
+                        loc = self._location(id_node, ctx.file_path)
+                        param_id = ctx.emitter.emit_parameter(
+                            name, loc, func_id, position=position
+                        )
+                        ctx.defined_vars[name] = param_id
+                        position += 1
 
     def _visit_block(self, node: tree_sitter.Node, ctx: _VisitContext) -> None:
         """Visit a block (function body). Recurse into statement_list."""
@@ -311,6 +351,7 @@ class GoVisitor(TreeSitterVisitor):
             return
 
         scope = ctx.current_scope
+        lhs_var_ids: list[NodeId | None] = []
         for id_node in _expression_list_identifiers(lhs):
             var_name = self._node_text(id_node, ctx.source)
             # Reuse existing var or create a new one
@@ -319,9 +360,14 @@ class GoVisitor(TreeSitterVisitor):
                 loc = self._location(id_node, ctx.file_path)
                 var_id = ctx.emitter.emit_variable(var_name, loc, scope)
                 ctx.defined_vars[var_name] = var_id
+            lhs_var_ids.append(var_id)
 
         if rhs is not None:
-            self._visit_expression_list(rhs, ctx)
+            rhs_ids = self._visit_expression_list(rhs, ctx)
+            for i, var_id in enumerate(lhs_var_ids):
+                if var_id is not None and i < len(rhs_ids) and rhs_ids[i] is not None:
+                    ctx.emitter.emit_definition(var_id, rhs_ids[i])
+                    ctx.emitter.emit_data_flow(rhs_ids[i], var_id)
 
     def _visit_expression_statement(
         self, node: tree_sitter.Node, ctx: _VisitContext

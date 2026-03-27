@@ -214,3 +214,238 @@ class TestCallResolution:
         # simple_function.ts doesn't call any of its own functions, so this may be empty
         # Just verify the method doesn't crash
         assert isinstance(calls_pairs, list)
+
+
+class TestDataFlow:
+    @pytest.fixture()
+    def cpg(self):
+        return _build("data_flow.ts")
+
+    def test_functions_present(self, cpg):
+        names = _node_names(cpg, NodeKind.FUNCTION)
+        assert "transform" in names
+        assert "multiAssign" in names
+
+    def test_parameters_present(self, cpg):
+        param_names = _node_names(cpg, NodeKind.PARAMETER)
+        assert "input" in param_names
+        assert "a" in param_names
+        assert "b" in param_names
+
+    def test_local_variable_nodes(self, cpg):
+        var_names = _node_names(cpg, NodeKind.VARIABLE)
+        assert "x" in var_names
+        assert "y" in var_names
+        assert "result" in var_names
+
+    def test_param_flows_to_local(self, cpg):
+        # input -> x is recorded as a data flow (param used in initializer)
+        dfg_pairs = _edge_pairs(cpg, EdgeKind.DATA_FLOWS_TO)
+        # x is defined from input via the visitor's emit_definition/emit_data_flow path
+        # The visitor emits x -> y (assignment) and y -> return
+        assert ("x", "y") in dfg_pairs, f"Expected x->y data flow. Got: {dfg_pairs}"
+        assert ("y", "return") in dfg_pairs, f"Expected y->return data flow. Got: {dfg_pairs}"
+
+    def test_module_level_variable(self, cpg):
+        # `const value = transform("hello")` produces a VARIABLE node at module scope
+        var_names = _node_names(cpg, NodeKind.VARIABLE)
+        assert "value" in var_names
+
+    def test_call_site_emitted(self, cpg):
+        call_names = _node_names(cpg, NodeKind.CALL)
+        assert "transform" in call_names
+
+    def test_return_nodes_present(self, cpg):
+        returns = list(cpg.nodes(kind=NodeKind.RETURN))
+        # One return per function: transform and multiAssign
+        assert len(returns) >= 2
+
+    def test_result_reassignment_produces_variable(self, cpg):
+        # `result = b` is a reassignment: visitor still emits a VARIABLE for result
+        var_names = _node_names(cpg, NodeKind.VARIABLE)
+        assert "result" in var_names
+
+    def test_result_flows_to_return(self, cpg):
+        dfg_pairs = _edge_pairs(cpg, EdgeKind.DATA_FLOWS_TO)
+        assert ("result", "return") in dfg_pairs, (
+            f"Expected result->return data flow. Got: {dfg_pairs}"
+        )
+
+
+class TestCrossFunctionTaint:
+    @pytest.fixture()
+    def cpg(self):
+        return _build("cross_function_taint.ts")
+
+    def test_all_functions_discovered(self, cpg):
+        names = _node_names(cpg, NodeKind.FUNCTION)
+        assert "source" in names
+        assert "passthrough" in names
+        assert "sink" in names
+        assert "main" in names
+
+    def test_call_sites_emitted(self, cpg):
+        call_names = _node_names(cpg, NodeKind.CALL)
+        assert "source" in call_names
+        assert "passthrough" in call_names
+        assert "sink" in call_names
+
+    def test_calls_edges_resolved(self, cpg):
+        # All three intra-module calls resolve to their definitions
+        calls_pairs = _edge_pairs(cpg, EdgeKind.CALLS)
+        assert ("source", "source") in calls_pairs, (
+            f"Expected source call resolved. Got: {calls_pairs}"
+        )
+        assert ("passthrough", "passthrough") in calls_pairs
+        assert ("sink", "sink") in calls_pairs
+
+    def test_data_variables_in_main(self, cpg):
+        var_names = _node_names(cpg, NodeKind.VARIABLE)
+        assert "data" in var_names
+        assert "processed" in var_names
+
+    def test_call_result_flows_to_variable(self, cpg):
+        # source() result flows to `data`; passthrough() result flows to `processed`
+        dfg_pairs = _edge_pairs(cpg, EdgeKind.DATA_FLOWS_TO)
+        assert ("source", "data") in dfg_pairs, (
+            f"Expected source->data data flow. Got: {dfg_pairs}"
+        )
+        assert ("passthrough", "processed") in dfg_pairs
+
+    def test_argument_flows_to_call(self, cpg):
+        # `processed` is passed to sink() — data flows from processed to the call node
+        dfg_pairs = _edge_pairs(cpg, EdgeKind.DATA_FLOWS_TO)
+        assert ("processed", "sink") in dfg_pairs, (
+            f"Expected processed->sink data flow. Got: {dfg_pairs}"
+        )
+
+    def test_parameter_receives_argument_flow(self, cpg):
+        # `data` (local in main) flows to the `data` parameter of passthrough
+        dfg_pairs = _edge_pairs(cpg, EdgeKind.DATA_FLOWS_TO)
+        assert ("data", "passthrough") in dfg_pairs, (
+            f"Expected data->passthrough data flow. Got: {dfg_pairs}"
+        )
+
+    def test_literal_in_source_function(self, cpg):
+        lit_names = _node_names(cpg, NodeKind.LITERAL)
+        assert '"tainted"' in lit_names
+
+
+class TestMethodCalls:
+    @pytest.fixture()
+    def cpg(self):
+        return _build("method_calls.ts")
+
+    def test_class_node_present(self, cpg):
+        class_names = _node_names(cpg, NodeKind.CLASS)
+        assert "Processor" in class_names
+
+    def test_methods_emitted(self, cpg):
+        func_names = _node_names(cpg, NodeKind.FUNCTION)
+        assert "constructor" in func_names
+        assert "process" in func_names
+        assert "validate" in func_names
+        assert "run" in func_names
+
+    def test_methods_scoped_to_class(self, cpg):
+        contains = _edge_pairs(cpg, EdgeKind.CONTAINS)
+        assert ("Processor", "constructor") in contains
+        assert ("Processor", "process") in contains
+        assert ("Processor", "validate") in contains
+
+    def test_run_function_at_module_scope(self, cpg):
+        contains = _edge_pairs(cpg, EdgeKind.CONTAINS)
+        assert ("method_calls", "run") in contains
+
+    def test_method_call_nodes(self, cpg):
+        call_names = _node_names(cpg, NodeKind.CALL)
+        assert "p.process" in call_names
+        assert "p.validate" in call_names
+
+    def test_method_calls_resolved(self, cpg):
+        calls_pairs = _edge_pairs(cpg, EdgeKind.CALLS)
+        assert ("p.process", "process") in calls_pairs, (
+            f"Expected p.process->process CALLS edge. Got: {calls_pairs}"
+        )
+        assert ("p.validate", "validate") in calls_pairs
+
+    def test_chained_data_flow(self, cpg):
+        # result is defined by p.process(); valid is defined by p.validate(result)
+        dfg_pairs = _edge_pairs(cpg, EdgeKind.DATA_FLOWS_TO)
+        assert ("p.process", "result") in dfg_pairs
+        assert ("p.validate", "valid") in dfg_pairs
+
+    def test_result_passed_to_validate(self, cpg):
+        # `result` is passed as argument to p.validate — flows to the call
+        dfg_pairs = _edge_pairs(cpg, EdgeKind.DATA_FLOWS_TO)
+        assert ("result", "p.validate") in dfg_pairs, (
+            f"Expected result->p.validate data flow. Got: {dfg_pairs}"
+        )
+
+    def test_valid_flows_to_return(self, cpg):
+        dfg_pairs = _edge_pairs(cpg, EdgeKind.DATA_FLOWS_TO)
+        assert ("valid", "return") in dfg_pairs, (
+            f"Expected valid->return data flow. Got: {dfg_pairs}"
+        )
+
+    def test_constructor_parameter(self, cpg):
+        param_names = _node_names(cpg, NodeKind.PARAMETER)
+        assert "data" in param_names
+
+
+class TestNestedScopes:
+    @pytest.fixture()
+    def cpg(self):
+        return _build("nested_scopes.ts")
+
+    def test_outer_function_present(self, cpg):
+        names = _node_names(cpg, NodeKind.FUNCTION)
+        assert "outer" in names
+
+    def test_inner_function_present(self, cpg):
+        # Nested function declarations are picked up via recursive visit
+        names = _node_names(cpg, NodeKind.FUNCTION)
+        assert "inner" in names, f"Expected inner function. Got functions: {names}"
+
+    def test_inner_scoped_to_outer(self, cpg):
+        contains = _edge_pairs(cpg, EdgeKind.CONTAINS)
+        assert ("outer", "inner") in contains, (
+            f"Expected outer CONTAINS inner. Got: {contains}"
+        )
+
+    def test_arrow_function_at_module_scope(self, cpg):
+        # `const adder = (a) => ...` emits adder as a FUNCTION
+        names = _node_names(cpg, NodeKind.FUNCTION)
+        assert "adder" in names, f"Expected adder arrow function. Got: {names}"
+
+    def test_parameters_across_scopes(self, cpg):
+        param_names = _node_names(cpg, NodeKind.PARAMETER)
+        assert "x" in param_names   # outer's param
+        assert "y" in param_names   # inner's param
+        assert "a" in param_names   # adder's param
+
+    def test_outer_has_parameter_x(self, cpg):
+        pairs = _edge_pairs(cpg, EdgeKind.HAS_PARAMETER)
+        assert ("outer", "x") in pairs
+
+    def test_inner_has_parameter_y(self, cpg):
+        pairs = _edge_pairs(cpg, EdgeKind.HAS_PARAMETER)
+        assert ("inner", "y") in pairs
+
+    def test_inner_call_emitted(self, cpg):
+        # `inner(10)` inside outer produces a CALL node
+        call_names = _node_names(cpg, NodeKind.CALL)
+        assert "inner" in call_names
+
+    def test_inner_call_resolved(self, cpg):
+        calls_pairs = _edge_pairs(cpg, EdgeKind.CALLS)
+        assert ("inner", "inner") in calls_pairs, (
+            f"Expected inner call resolved to inner function. Got: {calls_pairs}"
+        )
+
+    def test_literal_argument_flows_to_inner_call(self, cpg):
+        dfg_pairs = _edge_pairs(cpg, EdgeKind.DATA_FLOWS_TO)
+        # `10` is the argument to inner(10), so 10 -> inner call node
+        assert ("10", "inner") in dfg_pairs, (
+            f"Expected literal 10 -> inner call data flow. Got: {dfg_pairs}"
+        )

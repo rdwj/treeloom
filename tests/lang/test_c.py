@@ -256,3 +256,166 @@ void greet(char *name) { printf("%s\\n", name); }
         cpg = CPGBuilder(registry=_registry()).add_source(source, "df.c", "c").build()
         pairs = _edge_pairs(cpg, EdgeKind.DATA_FLOWS_TO)
         assert ("x", "return") in pairs, f"DATA_FLOWS_TO pairs: {pairs}"
+
+
+# ---------------------------------------------------------------------------
+# data_flow.c
+# ---------------------------------------------------------------------------
+
+
+class TestDataFlow:
+    @pytest.fixture()
+    def cpg(self) -> CodePropertyGraph:
+        return _build("data_flow.c")
+
+    def test_module_node(self, cpg: CodePropertyGraph) -> None:
+        modules = list(cpg.nodes(kind=NodeKind.MODULE))
+        assert len(modules) == 1
+        assert modules[0].name == "data_flow"
+
+    def test_function_nodes(self, cpg: CodePropertyGraph) -> None:
+        func_names = _node_names(cpg, NodeKind.FUNCTION)
+        assert "transform" in func_names
+        assert "multi_assign" in func_names
+
+    def test_parameter_nodes(self, cpg: CodePropertyGraph) -> None:
+        params = _node_names(cpg, NodeKind.PARAMETER)
+        assert "input" in params
+        assert "a" in params
+        assert "b" in params
+
+    def test_variable_nodes(self, cpg: CodePropertyGraph) -> None:
+        var_names = _node_names(cpg, NodeKind.VARIABLE)
+        assert "x" in var_names
+        assert "y" in var_names
+        assert "result" in var_names
+
+    def test_return_nodes(self, cpg: CodePropertyGraph) -> None:
+        returns = list(cpg.nodes(kind=NodeKind.RETURN))
+        assert len(returns) == 2
+
+    def test_dfg_chain_in_transform(self, cpg: CodePropertyGraph) -> None:
+        pairs = _edge_pairs(cpg, EdgeKind.DATA_FLOWS_TO)
+        assert ("input", "x") in pairs, f"DATA_FLOWS_TO pairs: {pairs}"
+        assert ("x", "y") in pairs
+        assert ("y", "return") in pairs
+
+    def test_dfg_multi_assign(self, cpg: CodePropertyGraph) -> None:
+        pairs = _edge_pairs(cpg, EdgeKind.DATA_FLOWS_TO)
+        # Both 'a' and 'b' are assigned to 'result'
+        assert ("a", "result") in pairs, f"DATA_FLOWS_TO pairs: {pairs}"
+        assert ("b", "result") in pairs
+        assert ("result", "return") in pairs
+
+    def test_contains_variables_in_functions(self, cpg: CodePropertyGraph) -> None:
+        pairs = _edge_pairs(cpg, EdgeKind.CONTAINS)
+        assert ("transform", "x") in pairs
+        assert ("transform", "y") in pairs
+        assert ("multi_assign", "result") in pairs
+
+
+# ---------------------------------------------------------------------------
+# cross_function_taint.c
+# ---------------------------------------------------------------------------
+
+
+class TestCrossFunctionTaint:
+    @pytest.fixture()
+    def cpg(self) -> CodePropertyGraph:
+        return _build("cross_function_taint.c")
+
+    def test_module_node(self, cpg: CodePropertyGraph) -> None:
+        modules = list(cpg.nodes(kind=NodeKind.MODULE))
+        assert len(modules) == 1
+        assert modules[0].name == "cross_function_taint"
+
+    def test_function_nodes(self, cpg: CodePropertyGraph) -> None:
+        func_names = _node_names(cpg, NodeKind.FUNCTION)
+        assert "source" in func_names
+        assert "passthrough" in func_names
+        assert "sink" in func_names
+        assert "main" in func_names
+
+    def test_call_nodes(self, cpg: CodePropertyGraph) -> None:
+        call_names = _node_names(cpg, NodeKind.CALL)
+        assert "source" in call_names
+        assert "passthrough" in call_names
+        assert "sink" in call_names
+
+    def test_call_resolution(self, cpg: CodePropertyGraph) -> None:
+        pairs = _edge_pairs(cpg, EdgeKind.CALLS)
+        assert ("source", "source") in pairs, f"CALLS pairs: {pairs}"
+        assert ("passthrough", "passthrough") in pairs
+        assert ("sink", "sink") in pairs
+
+    def test_variable_nodes(self, cpg: CodePropertyGraph) -> None:
+        var_names = _node_names(cpg, NodeKind.VARIABLE)
+        assert "data" in var_names
+        assert "processed" in var_names
+
+    def test_dfg_source_to_data(self, cpg: CodePropertyGraph) -> None:
+        pairs = _edge_pairs(cpg, EdgeKind.DATA_FLOWS_TO)
+        assert ("source", "data") in pairs, f"DATA_FLOWS_TO pairs: {pairs}"
+
+    def test_dfg_data_to_passthrough(self, cpg: CodePropertyGraph) -> None:
+        pairs = _edge_pairs(cpg, EdgeKind.DATA_FLOWS_TO)
+        assert ("data", "passthrough") in pairs, f"DATA_FLOWS_TO pairs: {pairs}"
+
+    def test_dfg_processed_to_sink(self, cpg: CodePropertyGraph) -> None:
+        pairs = _edge_pairs(cpg, EdgeKind.DATA_FLOWS_TO)
+        assert ("processed", "sink") in pairs, f"DATA_FLOWS_TO pairs: {pairs}"
+
+    def test_import_node(self, cpg: CodePropertyGraph) -> None:
+        imports = list(cpg.nodes(kind=NodeKind.IMPORT))
+        assert any(i.attrs.get("module") == "stdio.h" for i in imports)
+
+
+# ---------------------------------------------------------------------------
+# function_pointers.c
+# ---------------------------------------------------------------------------
+
+
+class TestFunctionPointers:
+    @pytest.fixture()
+    def cpg(self) -> CodePropertyGraph:
+        return _build("function_pointers.c")
+
+    def test_module_node(self, cpg: CodePropertyGraph) -> None:
+        modules = list(cpg.nodes(kind=NodeKind.MODULE))
+        assert len(modules) == 1
+        assert modules[0].name == "function_pointers"
+
+    def test_function_nodes(self, cpg: CodePropertyGraph) -> None:
+        func_names = _node_names(cpg, NodeKind.FUNCTION)
+        assert "add" in func_names
+        assert "apply" in func_names
+        assert "main" in func_names
+
+    def test_apply_parameters(self, cpg: CodePropertyGraph) -> None:
+        params = _node_names(cpg, NodeKind.PARAMETER)
+        # apply takes (op, x, y)
+        assert "op" in params
+        assert "x" in params
+        assert "y" in params
+
+    def test_call_nodes(self, cpg: CodePropertyGraph) -> None:
+        call_names = _node_names(cpg, NodeKind.CALL)
+        # indirect call via function pointer 'op'
+        assert "op" in call_names
+        # direct call to apply
+        assert "apply" in call_names
+
+    def test_apply_call_resolved(self, cpg: CodePropertyGraph) -> None:
+        pairs = _edge_pairs(cpg, EdgeKind.CALLS)
+        assert ("apply", "apply") in pairs, f"CALLS pairs: {pairs}"
+
+    def test_variable_result(self, cpg: CodePropertyGraph) -> None:
+        assert "result" in _node_names(cpg, NodeKind.VARIABLE)
+
+    def test_dfg_result_to_return(self, cpg: CodePropertyGraph) -> None:
+        pairs = _edge_pairs(cpg, EdgeKind.DATA_FLOWS_TO)
+        assert ("result", "return") in pairs, f"DATA_FLOWS_TO pairs: {pairs}"
+
+    def test_return_nodes(self, cpg: CodePropertyGraph) -> None:
+        returns = list(cpg.nodes(kind=NodeKind.RETURN))
+        assert len(returns) == 3
