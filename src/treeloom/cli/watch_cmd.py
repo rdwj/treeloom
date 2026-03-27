@@ -59,11 +59,12 @@ def _detect_changes(old: dict[Path, float], new: dict[Path, float]) -> list[Path
     return changed
 
 
-def _build_cpg(path: Path, exclude: list[str]) -> object:
-    """Build a CPG from *path* using the given exclusion patterns."""
+def _initial_build(path: Path, exclude: list[str]) -> tuple[CPGBuilder, object]:
+    """Build initial CPG and return (builder, cpg) for later incremental use."""
     builder = CPGBuilder()
     builder.add_directory(path, exclude=exclude)
-    return builder.build()
+    cpg = builder.build()
+    return builder, cpg
 
 
 def run_cmd(args: argparse.Namespace, cfg: Config | None = None) -> int:
@@ -80,7 +81,7 @@ def run_cmd(args: argparse.Namespace, cfg: Config | None = None) -> int:
     all_excludes = _DEFAULT_EXCLUDES + extra_excludes
 
     # Initial build
-    cpg = _build_cpg(path, extra_excludes)
+    builder, cpg = _initial_build(path, extra_excludes)
     output.parent.mkdir(parents=True, exist_ok=True)
     output.write_text(to_json(cpg), encoding="utf-8")
     err(f"Initial build: {cpg.node_count} nodes, {cpg.edge_count} edges -> {output}")
@@ -93,7 +94,7 @@ def run_cmd(args: argparse.Namespace, cfg: Config | None = None) -> int:
             current = _scan_mtimes(path, path, all_excludes)
             changed = _detect_changes(snapshot, current)
             if changed:
-                cpg = _build_cpg(path, extra_excludes)
+                cpg = builder.rebuild(changed=changed)
                 output.write_text(to_json(cpg), encoding="utf-8")
                 ts = time.strftime("%H:%M:%S")
                 err(

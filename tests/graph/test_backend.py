@@ -192,3 +192,57 @@ class TestSerialization:
         data = backend.to_dict()
         assert type(data) is dict
         assert type(data["nodes"]) is list
+
+
+class TestRemoveNode:
+    def test_remove_existing_node(self):
+        backend = NetworkXBackend()
+        backend.add_node("a")
+        backend.add_node("b")
+        backend.add_edge("a", "b", key="contains")
+        backend.remove_node("a")
+        assert not backend.has_node("a")
+        assert backend.has_node("b")
+        assert not backend.has_edge("a", "b")
+
+    def test_remove_nonexistent_node(self):
+        backend = NetworkXBackend()
+        backend.remove_node("missing")  # Should not raise
+
+    def test_remove_cascades_edges(self):
+        backend = NetworkXBackend()
+        backend.add_node("a")
+        backend.add_node("b")
+        backend.add_node("c")
+        backend.add_edge("a", "b", key="e1")
+        backend.add_edge("b", "c", key="e2")
+        backend.remove_node("b")
+        assert backend.edge_count() == 0
+
+
+class TestRemoveEdge:
+    def test_remove_existing_edge(self):
+        backend = NetworkXBackend()
+        backend.add_node("a")
+        backend.add_node("b")
+        backend.add_edge("a", "b", key="contains")
+        backend.remove_edge("a", "b", key="contains")
+        assert not backend.has_edge("a", "b")
+        assert backend.has_node("a")
+        assert backend.has_node("b")
+
+    def test_remove_nonexistent_edge(self):
+        backend = NetworkXBackend()
+        backend.add_node("a")
+        backend.add_node("b")
+        backend.remove_edge("a", "b", key="e1")  # Should not raise
+
+    def test_remove_one_edge_keeps_others(self):
+        backend = NetworkXBackend()
+        backend.add_node("a")
+        backend.add_node("b")
+        backend.add_edge("a", "b", key="contains")
+        backend.add_edge("a", "b", key="data_flows_to")
+        backend.remove_edge("a", "b", key="contains")
+        assert backend.has_edge("a", "b")  # data_flows_to still there
+        assert backend.edge_count() == 1

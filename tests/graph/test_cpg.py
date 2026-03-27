@@ -262,3 +262,74 @@ class TestFilesProperty:
         cpg.add_node(_make_node("a", file="x.py"))
         cpg.add_node(_make_node("b", file="x.py"))
         assert cpg.files == [Path("x.py")]
+
+
+class TestRemoveNode:
+    def test_remove_node(self):
+        cpg = CodePropertyGraph()
+        node = CpgNode(
+            id=NodeId("n1"), kind=NodeKind.VARIABLE, name="x",
+            location=SourceLocation(file=Path("a.py"), line=1),
+        )
+        cpg.add_node(node)
+        cpg.annotate_node(NodeId("n1"), "key", "value")
+        cpg.remove_node(NodeId("n1"))
+        assert cpg.node(NodeId("n1")) is None
+        assert cpg.node_count == 0
+        assert cpg.get_annotation(NodeId("n1"), "key") is None
+
+    def test_remove_node_cleans_edge_annotations(self):
+        cpg = CodePropertyGraph()
+        n1 = CpgNode(id=NodeId("n1"), kind=NodeKind.VARIABLE, name="x",
+                     location=SourceLocation(file=Path("a.py"), line=1))
+        n2 = CpgNode(id=NodeId("n2"), kind=NodeKind.CALL, name="f",
+                     location=SourceLocation(file=Path("a.py"), line=2))
+        cpg.add_node(n1)
+        cpg.add_node(n2)
+        cpg.add_edge(CpgEdge(source=NodeId("n1"), target=NodeId("n2"),
+                             kind=EdgeKind.DATA_FLOWS_TO))
+        cpg.annotate_edge(NodeId("n1"), NodeId("n2"), "tainted", True)
+        cpg.remove_node(NodeId("n1"))
+        assert cpg.get_edge_annotation(NodeId("n1"), NodeId("n2"), "tainted") is None
+
+    def test_remove_node_updates_file_index(self):
+        cpg = CodePropertyGraph()
+        node = CpgNode(
+            id=NodeId("n1"), kind=NodeKind.VARIABLE, name="x",
+            location=SourceLocation(file=Path("a.py"), line=1),
+        )
+        cpg.add_node(node)
+        assert len(cpg.nodes_for_file(Path("a.py"))) == 1
+        cpg.remove_node(NodeId("n1"))
+        assert len(cpg.nodes_for_file(Path("a.py"))) == 0
+
+
+class TestNodesForFile:
+    def test_nodes_for_file(self):
+        cpg = CodePropertyGraph()
+        n1 = CpgNode(id=NodeId("n1"), kind=NodeKind.VARIABLE, name="x",
+                     location=SourceLocation(file=Path("a.py"), line=1))
+        n2 = CpgNode(id=NodeId("n2"), kind=NodeKind.VARIABLE, name="y",
+                     location=SourceLocation(file=Path("a.py"), line=2))
+        n3 = CpgNode(id=NodeId("n3"), kind=NodeKind.VARIABLE, name="z",
+                     location=SourceLocation(file=Path("b.py"), line=1))
+        cpg.add_node(n1)
+        cpg.add_node(n2)
+        cpg.add_node(n3)
+        a_nodes = cpg.nodes_for_file(Path("a.py"))
+        assert len(a_nodes) == 2
+        assert set(str(n) for n in a_nodes) == {"n1", "n2"}
+
+    def test_nodes_for_nonexistent_file(self):
+        cpg = CodePropertyGraph()
+        assert cpg.nodes_for_file(Path("missing.py")) == []
+
+    def test_file_index_survives_serialization(self):
+        cpg = CodePropertyGraph()
+        node = CpgNode(
+            id=NodeId("n1"), kind=NodeKind.VARIABLE, name="x",
+            location=SourceLocation(file=Path("a.py"), line=1),
+        )
+        cpg.add_node(node)
+        restored = CodePropertyGraph.from_dict(cpg.to_dict())
+        assert len(restored.nodes_for_file(Path("a.py"))) == 1

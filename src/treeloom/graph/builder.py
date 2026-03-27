@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 import fnmatch
+import hashlib
 import logging
 import warnings
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 
 from treeloom.graph.cpg import CodePropertyGraph
@@ -37,6 +38,12 @@ class CPGBuilder:
         self._counter: int = 0
         self._sources: list[tuple[bytes, str, str | None]] = []
         self._files: list[Path] = []
+        self._file_snapshots: dict[str, str] = {}  # POSIX path string -> content SHA-256
+
+    @staticmethod
+    def _file_hash(path: Path) -> str:
+        """SHA-256 hex digest of file contents."""
+        return hashlib.sha256(path.read_bytes()).hexdigest()
 
     # -- Fluent configuration -------------------------------------------------
 
@@ -83,12 +90,16 @@ class CPGBuilder:
         """
         registry = self._get_registry()
 
-        # Process queued files
-        for file_path in self._files:
+        # Drain and process queued files
+        queued_files = self._files
+        self._files = []
+        for file_path in queued_files:
             self._process_file(file_path, registry)
 
-        # Process queued raw sources
-        for source_bytes, filename, language in self._sources:
+        # Drain and process queued raw sources
+        queued_sources = self._sources
+        self._sources = []
+        for source_bytes, filename, language in queued_sources:
             self._process_source(source_bytes, filename, language, registry)
 
         # Phase 3: CFG — connect statements within each function
@@ -104,6 +115,14 @@ class CPGBuilder:
         # Clear tree-sitter node references now that build is complete
         for cpg_node in self._cpg._nodes.values():
             cpg_node._tree_node = None
+
+        # Record file snapshots for incremental rebuild
+        for file_path in self._cpg.files:
+            try:
+                posix_key = str(PurePosixPath(file_path))
+                self._file_snapshots[posix_key] = self._file_hash(file_path)
+            except OSError:
+                pass
 
         return self._cpg
 
@@ -509,6 +528,7 @@ class CPGBuilder:
                             source=arg_sources[i].id,
                             target=param.id,
                             kind=EdgeKind.DATA_FLOWS_TO,
+                            attrs={"interprocedural": True},
                         )
                     )
 
@@ -532,8 +552,192 @@ class CPGBuilder:
                                 source=src.id,
                                 target=call_node.id,
                                 kind=EdgeKind.DATA_FLOWS_TO,
+                                attrs={"interprocedural": True},
                             )
                         )
+
+    # -- Incremental rebuild --------------------------------------------------
+
+    def rebuild(
+        self,
+        changed: list[Path] | None = None,
+    ) -> CodePropertyGraph:
+        """Incrementally update the CPG for changed source files.
+
+        If *changed* is provided, only those files are re-parsed.
+        Otherwise, all previously tracked files are checked for changes
+        by comparing SHA-256 content hashes.
+
+        Annotations on nodes from unchanged files are preserved.
+        Annotations on nodes from changed files are invalidated.
+
+        Returns the same CodePropertyGraph instance, updated in place.
+        """
+        registry = self._get_registry()
+
+        # Determine which files changed
+        if changed is not None:
+            changed_paths = [
+                p.resolve() if not p.is_absolute() else p for p in changed
+            ]
+        else:
+            changed_paths = self._detect_changed_files()
+
+        if not changed_paths and not self._files and not self._sources:
+            return self._cpg
+
+        # Collect POSIX keys for changed files
+        changed_posix: set[str] = set()
+
+        # Purge nodes/edges from changed files
+        for file_path in changed_paths:
+            changed_posix.add(str(PurePosixPath(file_path)))
+            self._purge_file(file_path)
+
+        # Drain any newly queued files/sources before purging cross-file edges
+        new_files = list(self._files)
+        new_sources = list(self._sources)
+        self._files = []
+        self._sources = []
+
+        for f in new_files:
+            changed_posix.add(str(PurePosixPath(f)))
+
+        # Purge cross-file edges (CALLS + inter-procedural DFG)
+        self._purge_cross_file_edges()
+
+        # Re-parse changed files (if they still exist)
+        for file_path in changed_paths:
+            if file_path.exists():
+                self._process_file(file_path, registry)
+
+        # Parse new files
+        for file_path in new_files:
+            self._process_file(file_path, registry)
+
+        for source_bytes, filename, language in new_sources:
+            self._process_source(source_bytes, filename, language, registry)
+
+        # Rebuild CFG for changed/new files only
+        self._build_cfg_for_files(changed_posix)
+
+        # Re-run call resolution globally (conservative)
+        if registry is not None:
+            self._resolve_calls(registry)
+
+        # Re-run inter-procedural DFG globally
+        self._build_interprocedural_dfg()
+
+        # Clear tree-sitter references on new nodes
+        for cpg_node in self._cpg._nodes.values():
+            cpg_node._tree_node = None
+
+        # Update file snapshots
+        for file_path in self._cpg.files:
+            try:
+                posix_key = str(PurePosixPath(file_path))
+                self._file_snapshots[posix_key] = self._file_hash(file_path)
+            except OSError:
+                pass
+
+        return self._cpg
+
+    def _detect_changed_files(self) -> list[Path]:
+        """Compare stored hashes to current file contents and return changed files."""
+        changed: list[Path] = []
+        for posix_key, old_hash in list(self._file_snapshots.items()):
+            file_path = Path(posix_key)
+            if not file_path.exists():
+                changed.append(file_path)  # deleted
+                continue
+            try:
+                current_hash = self._file_hash(file_path)
+                if current_hash != old_hash:
+                    changed.append(file_path)
+            except OSError:
+                changed.append(file_path)
+        return changed
+
+    def _purge_file(self, file_path: Path) -> None:
+        """Remove all nodes (and their adjacent edges) originating from a file."""
+        for node_id in self._cpg.nodes_for_file(file_path):
+            self._cpg.remove_node(node_id)
+        posix_key = str(PurePosixPath(file_path))
+        self._file_snapshots.pop(posix_key, None)
+
+    def _purge_cross_file_edges(self) -> None:
+        """Remove all CALLS edges and inter-procedural DATA_FLOWS_TO edges.
+
+        These are rebuilt globally during call resolution and inter-procedural
+        DFG phases, so they must be cleared before re-running those phases.
+        """
+        to_remove: list[tuple[NodeId, NodeId, EdgeKind]] = []
+        for edge in self._cpg.edges(kind=EdgeKind.CALLS):
+            to_remove.append((edge.source, edge.target, edge.kind))
+        for edge in self._cpg.edges(kind=EdgeKind.DATA_FLOWS_TO):
+            if edge.attrs.get("interprocedural"):
+                to_remove.append((edge.source, edge.target, edge.kind))
+        for source, target, kind in to_remove:
+            self._cpg.remove_edge(source, target, kind)
+
+    def _build_cfg_for_files(self, changed_files: set[str]) -> None:
+        """Build CFG edges for functions in the changed files only."""
+        for func in self._cpg.nodes(kind=NodeKind.FUNCTION):
+            if func.location is None:
+                continue
+            file_key = str(PurePosixPath(func.location.file))
+            if file_key not in changed_files:
+                continue
+
+            children = self._cpg.children_of(func.id)
+            if not children:
+                continue
+
+            located = [
+                (c, c.location) for c in children if c.location is not None
+            ]
+            located.sort(key=lambda x: (x[1].line, x[1].column))
+            sorted_children = [c for c, _ in located]
+
+            for i in range(len(sorted_children) - 1):
+                current = sorted_children[i]
+                next_node = sorted_children[i + 1]
+                if current.kind == NodeKind.RETURN:
+                    continue
+                self._cpg.add_edge(CpgEdge(
+                    source=current.id,
+                    target=next_node.id,
+                    kind=EdgeKind.FLOWS_TO,
+                ))
+
+            for child in sorted_children:
+                if child.kind not in (NodeKind.BRANCH, NodeKind.LOOP):
+                    continue
+                body_children = self._cpg.children_of(child.id)
+                if not body_children:
+                    continue
+                bc_located = [
+                    (bc, bc.location)
+                    for bc in body_children
+                    if bc.location is not None
+                ]
+                bc_located.sort(key=lambda x: (x[1].line, x[1].column))
+                if not bc_located:
+                    continue
+                first_body = bc_located[0][0]
+                self._cpg.add_edge(CpgEdge(
+                    source=child.id,
+                    target=first_body.id,
+                    kind=EdgeKind.BRANCHES_TO,
+                ))
+                if child.kind == NodeKind.LOOP:
+                    last_body = bc_located[-1][0]
+                    if last_body.kind != NodeKind.RETURN:
+                        self._cpg.add_edge(CpgEdge(
+                            source=last_body.id,
+                            target=child.id,
+                            kind=EdgeKind.FLOWS_TO,
+                        ))
 
     def _resolve_calls(self, registry: Any) -> None:
         """Run call resolution for all registered visitors."""

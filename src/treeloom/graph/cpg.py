@@ -29,6 +29,7 @@ class CodePropertyGraph:
         self._nodes: dict[str, CpgNode] = {}
         self._annotations: dict[str, dict[str, Any]] = {}
         self._edge_annotations: dict[tuple[str, str], dict[str, Any]] = {}
+        self._file_nodes: dict[str, set[str]] = {}
 
     # -- Node access ----------------------------------------------------------
 
@@ -41,6 +42,37 @@ class CodePropertyGraph:
             kind=node.kind.value,
             name=node.name,
         )
+        if node.location is not None:
+            file_key = str(PurePosixPath(node.location.file))
+            self._file_nodes.setdefault(file_key, set()).add(id_str)
+
+    def remove_node(self, node_id: NodeId) -> None:
+        """Remove a node and all its adjacent edges from the graph.
+
+        Also cleans up annotations and the file provenance index.
+        """
+        id_str = str(node_id)
+        node = self._nodes.pop(id_str, None)
+
+        if node is not None and node.location is not None:
+            file_key = str(PurePosixPath(node.location.file))
+            file_set = self._file_nodes.get(file_key)
+            if file_set is not None:
+                file_set.discard(id_str)
+                if not file_set:
+                    del self._file_nodes[file_key]
+
+        self._annotations.pop(id_str, None)
+
+        stale_keys = [
+            k for k in self._edge_annotations
+            if k[0] == id_str or k[1] == id_str
+        ]
+        for k in stale_keys:
+            del self._edge_annotations[k]
+
+        if self._backend.has_node(id_str):
+            self._backend.remove_node(id_str)
 
     def node(self, node_id: NodeId) -> CpgNode | None:
         """Look up a node by its ID."""
@@ -60,6 +92,11 @@ class CodePropertyGraph:
                     continue
             yield cpg_node
 
+    def nodes_for_file(self, file: Path) -> list[NodeId]:
+        """Return all node IDs originating from the given source file."""
+        file_key = str(PurePosixPath(file))
+        return [NodeId(nid) for nid in self._file_nodes.get(file_key, set())]
+
     # -- Edge access ----------------------------------------------------------
 
     def add_edge(self, edge: CpgEdge) -> None:
@@ -70,6 +107,16 @@ class CodePropertyGraph:
             key=edge.kind.value,
             **edge.attrs,
         )
+
+    def remove_edge(
+        self, source: NodeId, target: NodeId, kind: EdgeKind | None = None
+    ) -> None:
+        """Remove an edge between two nodes."""
+        src_str = str(source)
+        tgt_str = str(target)
+        self._edge_annotations.pop((src_str, tgt_str), None)
+        key = kind.value if kind is not None else None
+        self._backend.remove_edge(src_str, tgt_str, key=key)
 
     def edges(self, kind: EdgeKind | None = None) -> Iterator[CpgEdge]:
         """Iterate over edges, optionally filtering by kind."""
