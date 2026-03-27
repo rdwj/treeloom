@@ -876,10 +876,14 @@ class TestInterProceduralIntegration:
         )
         result = run_taint(cpg, policy)
 
+        dfg = [
+            (str(e.source), str(e.target))
+            for e in cpg.edges(kind=EdgeKind.DATA_FLOWS_TO)
+        ]
         assert len(result.unsanitized_paths()) > 0, (
             f"Expected taint paths to eval(), got none. "
             f"Nodes: {[(n.kind.value, n.name) for n in cpg.nodes()]}, "
-            f"DFG edges: {[(str(e.source), str(e.target)) for e in cpg.edges(kind=EdgeKind.DATA_FLOWS_TO)]}"
+            f"DFG edges: {dfg}"
         )
 
     def test_transitive_call_chain(self):
@@ -902,10 +906,17 @@ class TestInterProceduralIntegration:
         result = run_taint(cpg, policy)
 
         unsanitized = result.unsanitized_paths()
+        calls = [
+            (str(e.source), str(e.target))
+            for e in cpg.edges(kind=EdgeKind.CALLS)
+        ]
+        dfg = [
+            (str(e.source), str(e.target))
+            for e in cpg.edges(kind=EdgeKind.DATA_FLOWS_TO)
+        ]
         assert len(unsanitized) > 0, (
             f"Expected transitive taint from user_input to eval(). "
-            f"CALLS edges: {[(str(e.source), str(e.target)) for e in cpg.edges(kind=EdgeKind.CALLS)]}, "
-            f"DFG edges: {[(str(e.source), str(e.target)) for e in cpg.edges(kind=EdgeKind.DATA_FLOWS_TO)]}"
+            f"CALLS edges: {calls}, DFG edges: {dfg}"
         )
         # Verify the path traverses all expected functions
         path = unsanitized[0]
