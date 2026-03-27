@@ -10,7 +10,12 @@ from pathlib import Path
 from treeloom.cli._util import err, write_output
 from treeloom.cli.config import Config
 from treeloom.export.json import to_json
-from treeloom.graph.builder import BuildProgressCallback, BuildTimeoutError, _DEFAULT_EXCLUDES, CPGBuilder
+from treeloom.graph.builder import (
+    _DEFAULT_EXCLUDES,
+    BuildProgressCallback,
+    BuildTimeoutError,
+    CPGBuilder,
+)
 from treeloom.lang.registry import LanguageRegistry
 
 

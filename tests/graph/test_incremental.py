@@ -7,7 +7,6 @@ from pathlib import Path
 import pytest
 
 from treeloom.graph.builder import CPGBuilder
-from treeloom.model.edges import EdgeKind
 from treeloom.model.nodes import NodeKind
 
 

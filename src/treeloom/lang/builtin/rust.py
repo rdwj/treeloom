@@ -66,7 +66,11 @@ class RustVisitor(TreeSitterVisitor):
     ) -> list[tuple[NodeId, NodeId]]:
         """Link CALL nodes to FUNCTION definitions by name matching."""
         functions: dict[str, list[CpgNode]] = {}
-        for n in (function_nodes if function_nodes is not None else cpg.nodes(kind=NodeKind.FUNCTION)):
+        fn_iter = (
+            function_nodes if function_nodes is not None
+            else cpg.nodes(kind=NodeKind.FUNCTION)
+        )
+        for n in fn_iter:
             functions.setdefault(n.name, []).append(n)
 
         resolved: list[tuple[NodeId, NodeId]] = []

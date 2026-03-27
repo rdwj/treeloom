@@ -73,8 +73,13 @@ class PythonVisitor(TreeSitterVisitor):
         Uses inferred receiver types and MRO traversal for method calls,
         falling back to name-based matching for plain function calls.
         """
+        fn_list = (
+            function_nodes
+            if function_nodes is not None
+            else list(cpg.nodes(kind=NodeKind.FUNCTION))
+        )
         functions: dict[str, list[CpgNode]] = {}
-        for n in (function_nodes if function_nodes is not None else cpg.nodes(kind=NodeKind.FUNCTION)):
+        for n in fn_list:
             functions.setdefault(n.name, []).append(n)
 
         # Build class hierarchy and method index for type-based resolution
@@ -83,7 +88,7 @@ class PythonVisitor(TreeSitterVisitor):
             class_nodes[n.name] = n
 
         method_index: dict[tuple[str, str], CpgNode] = {}
-        for fn in (function_nodes if function_nodes is not None else cpg.nodes(kind=NodeKind.FUNCTION)):
+        for fn in fn_list:
             scope = cpg.scope_of(fn.id)
             if scope is not None and scope.kind == NodeKind.CLASS:
                 method_index[(scope.name, fn.name)] = fn

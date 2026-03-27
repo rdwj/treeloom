@@ -208,19 +208,19 @@ mypy src/treeloom/
 
 ## Changelog
 
-### Unreleased
+### Version 0.4.0
 
+- Language-filtered call resolution: build no longer hangs on large multi-language repos. CALL nodes are partitioned by language during resolution while FUNCTION nodes remain shared across visitors.
+- Build progress callbacks: `CPGBuilder(progress=callback)` accepts a `BuildProgressCallback` callable that receives per-phase status and timing. New public type `BuildProgressCallback`.
+- Build timeout: `CPGBuilder(timeout=seconds)` aborts a stalled build with `BuildTimeoutError`. Exposed as `--timeout` CLI flag. New public type `BuildTimeoutError`.
+- `LanguageVisitor.resolve_calls()` now accepts optional `function_nodes` and `call_nodes` kwargs for pre-filtered node sets, enabling the language-filtered resolution path.
 - Stdlib data flow propagation models: `load_models(["python-stdlib"])` returns `TaintPropagator` instances for json, pickle, os.path, subprocess, urllib.parse, base64, shlex, builtins, and string/dict methods. Also `list_builtin_models()` and `load_model_file()`. Models live in `src/treeloom/models/builtin/` as YAML.
 - Basic type inference for call resolution: Python visitor tracks constructor assignments (`d = Dog()`) and records `inferred_type` on VARIABLE nodes, `receiver_inferred_type` on CALL nodes. Class definitions get `attrs["bases"]`. Method calls with known receiver types resolve via MRO before name-matching fallback.
 - Incremental/delta-based CPG rebuild: `CPGBuilder.rebuild(changed=...)` re-parses only changed files; unchanged nodes, edges, and annotations are preserved. `CodePropertyGraph` gains `remove_node()` (cascading edge removal), `remove_edge()`, and `nodes_for_file()`. SHA-256 content hashing for auto change detection when `changed` is None.
 - Benchmark suite: pytest-benchmark based, synthetic Python at 500/2k/5k LOC exercising build, taint, JSON round-trip, and query. Memory tests via psutil.
 - Field-sensitive taint propagation: `TaintLabel.field_path` (str | None) distinguishes `obj.field_a` taint from `obj` taint. Attribute access edges with `field_name` attrs narrow object-level taint to field-level; mismatching fields filtered. `emit_data_flow` now accepts `**attrs`.
 - Non-Python language visitor fixture tests: data_flow, cross_function_taint, method_calls, nested_scopes fixtures for JS, Go, TS, Rust, C, C++. Fixed Go visitor bug with missing DATA_FLOWS_TO for reassignments and parameter DFG.
-- Language-filtered call resolution: build no longer hangs on large multi-language repos. CALL nodes are partitioned by language during resolution while FUNCTION nodes remain shared across visitors.
-- Build progress callbacks: `CPGBuilder(progress=callback)` accepts a `BuildProgressCallback` callable that receives per-phase status and timing. New public type `BuildProgressCallback`.
-- Build timeout: `CPGBuilder(timeout=seconds)` aborts a stalled build with `BuildTimeoutError`. Exposed as `--timeout` CLI flag. New public type `BuildTimeoutError`.
-- `LanguageVisitor.resolve_calls()` now accepts optional `function_nodes` and `call_nodes` kwargs for pre-filtered node sets, enabling the language-filtered resolution path.
-- 1123 tests
+- 1131 tests
 
 ### Version 0.3.0
 

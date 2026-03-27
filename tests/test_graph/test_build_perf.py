@@ -3,15 +3,12 @@
 from __future__ import annotations
 
 import re
-from pathlib import Path
 
 import pytest
 
 from treeloom.graph.builder import BuildTimeoutError, CPGBuilder
 from treeloom.lang.registry import LanguageRegistry
 from treeloom.model.edges import EdgeKind
-from treeloom.model.nodes import NodeKind
-
 
 # ---------------------------------------------------------------------------
 # 1. Language-filtered call resolution

@@ -7,8 +7,9 @@ import hashlib
 import logging
 import time
 import warnings
+from collections.abc import Callable
 from pathlib import Path, PurePosixPath
-from typing import Any, Callable
+from typing import Any
 
 from treeloom.graph.cpg import CodePropertyGraph
 from treeloom.model.edges import CpgEdge, EdgeKind
