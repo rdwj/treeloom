@@ -208,6 +208,14 @@ mypy src/treeloom/
 
 ## Changelog
 
+### Version 0.4.1
+
+- Edge queries (`treeloom edges`) now show file:line locations for source and target nodes in all output formats (table, JSON, CSV, TSV). JSON output includes explicit `file` and `line` fields.
+- `config --set` and `--unset` now list valid config keys when an unknown key is provided.
+- `config --init` warns when the current directory doesn't appear to be a project root and prints the resolved absolute path on success.
+- License corrected to MIT across all project metadata.
+- 1131 tests
+
 ### Version 0.4.0
 
 - Language-filtered call resolution: build no longer hangs on large multi-language repos. CALL nodes are partitioned by language during resolution while FUNCTION nodes remain shared across visitors.
@@ -321,4 +329,4 @@ mypy src/treeloom/
 
 ## License
 
-Apache-2.0
+MIT
