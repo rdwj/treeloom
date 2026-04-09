@@ -93,6 +93,18 @@ class PythonVisitor(TreeSitterVisitor):
             if scope is not None and scope.kind == NodeKind.CLASS:
                 method_index[(scope.name, fn.name)] = fn
 
+        # Build import map: local_name -> (module_name, original_name)
+        # This lets us resolve calls to imported functions by finding them
+        # in the CPG under their original module scope.
+        import_map: dict[str, tuple[str, str]] = {}
+        for imp_node in cpg.nodes(kind=NodeKind.IMPORT):
+            if imp_node.attrs.get("is_from"):
+                module = imp_node.attrs.get("module", "")
+                for imp_name in imp_node.attrs.get("names", []):
+                    aliases = imp_node.attrs.get("aliases") or {}
+                    local = aliases.get(imp_name, imp_name)
+                    import_map[local] = (module, imp_name)
+
         resolved: list[tuple[NodeId, NodeId]] = []
 
         for call_node in (call_nodes if call_nodes is not None else cpg.nodes(kind=NodeKind.CALL)):
@@ -119,6 +131,21 @@ class PythonVisitor(TreeSitterVisitor):
                 fn = self._resolve_single_call(
                     call_node, short_name, functions, cpg,
                 )
+
+            # Try import-following: if the call target was imported, look
+            # for the function in the source module's scope
+            if fn is None and target in import_map:
+                imp_module, imp_name = import_map[target]
+                # Find candidates with the original name scoped in the right module
+                imp_candidates = functions.get(imp_name, [])
+                for candidate in imp_candidates:
+                    scope = cpg.scope_of(candidate.id)
+                    if scope is not None and scope.kind == NodeKind.MODULE:
+                        # Match module name (stem, e.g. "utils" matches "utils.py")
+                        mod_parts = imp_module.rsplit(".", 1)
+                        if scope.name == imp_module or scope.name in mod_parts:
+                            fn = candidate
+                            break
 
             if fn is not None:
                 cpg.add_edge(_make_calls_edge(call_node.id, fn.id))
@@ -176,6 +203,13 @@ class PythonVisitor(TreeSitterVisitor):
                 scope = cpg.scope_of(fn.id)
                 if scope is not None and scope.name == qualifier:
                     return fn
+            # Check one level up (e.g. function in class in module)
+            for fn in candidates:
+                scope = cpg.scope_of(fn.id)
+                while scope is not None:
+                    if scope.name == qualifier:
+                        return fn
+                    scope = cpg.scope_of(scope.id)
 
         # Fall back to first match (best-effort)
         return candidates[0]
@@ -219,6 +253,7 @@ class PythonVisitor(TreeSitterVisitor):
             class_name, loc, scope, bases=bases or None,
         )
         ctx.scope_stack.append(class_id)
+        ctx.class_stack.append(class_name)
         ctx.defined_vars.push()
 
         body = node.child_by_field_name("body")
@@ -227,6 +262,7 @@ class PythonVisitor(TreeSitterVisitor):
                 self._visit_node(child, ctx)
 
         ctx.defined_vars.pop()
+        ctx.class_stack.pop()
         ctx.scope_stack.pop()
 
     def _visit_decorated_definition(
@@ -887,6 +923,10 @@ class PythonVisitor(TreeSitterVisitor):
             if obj is not None and obj.type == "identifier":
                 receiver_name = self._node_text(obj, ctx.source)
                 receiver_type = ctx.var_types.get(receiver_name)
+                # For self/cls, infer from enclosing class
+                if receiver_type is None and receiver_name in ("self", "cls"):
+                    if ctx.class_stack:
+                        receiver_type = ctx.class_stack[-1]
 
         loc = self._location(node, ctx.file_path)
         scope = ctx.current_scope
@@ -949,6 +989,7 @@ class _VisitContext:
         "defined_vars",
         "pending_decorators",
         "var_types",
+        "class_stack",
     )
 
     def __init__(
@@ -964,6 +1005,7 @@ class _VisitContext:
         self.defined_vars: ScopeStack = ScopeStack()
         self.pending_decorators: list[str] = []
         self.var_types: dict[str, str] = {}
+        self.class_stack: list[str] = []
 
     @property
     def current_scope(self) -> NodeId:

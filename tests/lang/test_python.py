@@ -1151,3 +1151,137 @@ class TestTypeInference:
             f"Expected d.fetch() -> Dog.fetch edge, got CALLS edges: "
             f"{[(cpg.node(e.source).name, cpg.node(e.target).name) for e in calls_edges]}"
         )
+
+
+class TestSelfClsResolution:
+    """self.method() and cls.method() should resolve via enclosing class."""
+
+    @pytest.fixture()
+    def cpg(self):
+        return _build("self_method_calls.py")
+
+    def test_self_calls_have_receiver_type(self, cpg):
+        """self.method() calls should have receiver_inferred_type set."""
+        self_calls = [
+            n for n in cpg.nodes(kind=NodeKind.CALL)
+            if n.name.startswith("self.")
+        ]
+        assert len(self_calls) > 0, "Expected self.method() call nodes"
+        # All self calls inside Calculator should have receiver type
+        for call in self_calls:
+            assert call.attrs.get("receiver_inferred_type") is not None, (
+                f"self call {call.name} at {call.location} missing receiver_inferred_type"
+            )
+
+    def test_self_reset_resolves_to_calculator_reset(self, cpg):
+        """self.reset() in Calculator.compute should resolve to Calculator.reset."""
+        calc_class = next(
+            n for n in cpg.nodes(kind=NodeKind.CLASS) if n.name == "Calculator"
+        )
+        calc_reset = next(
+            n for n in cpg.nodes(kind=NodeKind.FUNCTION)
+            if n.name == "reset" and n.scope == calc_class.id
+        )
+        calls_edges = _edge_pairs(cpg, EdgeKind.CALLS)
+        assert ("self.reset", "reset") in calls_edges, (
+            f"Expected self.reset -> reset edge, got: {calls_edges}"
+        )
+        # Verify it's specifically Calculator.reset, not some other reset
+        calls = list(cpg.edges(kind=EdgeKind.CALLS))
+        reset_calls = [
+            e for e in calls
+            if cpg.node(e.source) and cpg.node(e.source).name == "self.reset"
+        ]
+        assert any(e.target == calc_reset.id for e in reset_calls)
+
+    def test_self_add_resolves_in_subclass(self, cpg):
+        """self.add() in AdvancedCalc.compute should resolve to Calculator.add (inherited)."""
+        calc_class = next(
+            n for n in cpg.nodes(kind=NodeKind.CLASS) if n.name == "Calculator"
+        )
+        calc_add = next(
+            n for n in cpg.nodes(kind=NodeKind.FUNCTION)
+            if n.name == "add" and n.scope == calc_class.id
+        )
+        # AdvancedCalc.compute calls self.add() — AdvancedCalc inherits add from Calculator
+        adv_class = next(
+            n for n in cpg.nodes(kind=NodeKind.CLASS) if n.name == "AdvancedCalc"
+        )
+        # Find self.add calls inside AdvancedCalc scope (inside compute)
+        adv_compute = next(
+            n for n in cpg.nodes(kind=NodeKind.FUNCTION)
+            if n.name == "compute" and n.scope == adv_class.id
+        )
+        adv_add_calls = [
+            n for n in cpg.nodes(kind=NodeKind.CALL)
+            if n.name == "self.add" and n.scope == adv_compute.id
+        ]
+        assert len(adv_add_calls) >= 1, "Expected self.add() call inside AdvancedCalc.compute"
+        calls_edges = list(cpg.edges(kind=EdgeKind.CALLS))
+        assert any(
+            e.source == adv_add_calls[0].id and e.target == calc_add.id
+            for e in calls_edges
+        ), (
+            f"Expected self.add() in AdvancedCalc -> Calculator.add, got CALLS: "
+            f"{[(cpg.node(e.source).name, cpg.node(e.target).name) for e in calls_edges]}"
+        )
+
+    def test_self_multiply_resolves_to_own_method(self, cpg):
+        """self.multiply() in AdvancedCalc.compute should resolve to AdvancedCalc.multiply."""
+        adv_class = next(
+            n for n in cpg.nodes(kind=NodeKind.CLASS) if n.name == "AdvancedCalc"
+        )
+        adv_multiply = next(
+            n for n in cpg.nodes(kind=NodeKind.FUNCTION)
+            if n.name == "multiply" and n.scope == adv_class.id
+        )
+        multiply_calls = [
+            n for n in cpg.nodes(kind=NodeKind.CALL)
+            if n.name == "self.multiply"
+        ]
+        assert len(multiply_calls) >= 1
+        calls_edges = list(cpg.edges(kind=EdgeKind.CALLS))
+        assert any(
+            e.source == multiply_calls[0].id and e.target == adv_multiply.id
+            for e in calls_edges
+        )
+
+
+class TestImportFollowingResolution:
+    """Calls to imported functions should resolve when the source module is in the CPG."""
+
+    @pytest.fixture()
+    def cpg(self):
+        builder = CPGBuilder()
+        builder.add_file(FIXTURES / "import_resolution_lib.py")
+        builder.add_file(FIXTURES / "import_resolution_caller.py")
+        return builder.build()
+
+    def test_helper_call_resolves(self, cpg):
+        """helper() in caller should resolve to helper() in lib."""
+        calls_edges = _edge_pairs(cpg, EdgeKind.CALLS)
+        assert ("helper", "helper") in calls_edges, (
+            f"Expected helper -> helper edge, got: {calls_edges}"
+        )
+
+    def test_transform_call_resolves(self, cpg):
+        """transform() in caller should resolve to transform() in lib."""
+        calls_edges = _edge_pairs(cpg, EdgeKind.CALLS)
+        assert ("transform", "transform") in calls_edges, (
+            f"Expected transform -> transform edge, got: {calls_edges}"
+        )
+
+    def test_resolved_targets_are_in_lib_module(self, cpg):
+        """Resolved functions should be scoped inside the lib module, not the caller."""
+        lib_module = next(
+            n for n in cpg.nodes(kind=NodeKind.MODULE)
+            if n.name == "import_resolution_lib"
+        )
+        calls = list(cpg.edges(kind=EdgeKind.CALLS))
+        for edge in calls:
+            target = cpg.node(edge.target)
+            if target and target.name in ("helper", "transform"):
+                assert target.scope == lib_module.id, (
+                    f"{target.name} should be scoped in import_resolution_lib, "
+                    f"got scope {cpg.scope_of(target.id).name if cpg.scope_of(target.id) else '?'}"
+                )

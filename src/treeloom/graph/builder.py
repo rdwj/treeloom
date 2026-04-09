@@ -56,6 +56,7 @@ class CPGBuilder:
         registry: Any | None = None,
         progress: BuildProgressCallback | None = None,
         timeout: float | None = None,
+        relative_root: Path | None = None,
     ) -> None:
         self._registry = registry
         self._cpg = CodePropertyGraph()
@@ -66,6 +67,9 @@ class CPGBuilder:
         self._progress = progress
         self._timeout = timeout
         self._build_start: float | None = None
+        self._relative_root: Path | None = (
+            relative_root.resolve() if relative_root is not None else None
+        )
 
     @staticmethod
     def _file_hash(path: Path) -> str:
@@ -85,6 +89,16 @@ class CPGBuilder:
         elapsed = time.monotonic() - self._build_start
         if elapsed >= self._timeout:
             raise BuildTimeoutError(phase, elapsed, self._timeout)
+
+    def _normalize_path(self, path: Path) -> Path:
+        """Convert path to relative if relative_root is configured."""
+        if self._relative_root is None:
+            return path
+        try:
+            return path.resolve().relative_to(self._relative_root)
+        except ValueError:
+            # Path is outside the relative root — use as-is
+            return path
 
     # -- Fluent configuration -------------------------------------------------
 
@@ -194,7 +208,12 @@ class CPGBuilder:
         for file_path in self._cpg.files:
             try:
                 posix_key = str(PurePosixPath(file_path))
-                self._file_snapshots[posix_key] = self._file_hash(file_path)
+                abs_path = (
+                    self._relative_root / file_path
+                    if self._relative_root is not None
+                    else file_path
+                )
+                self._file_snapshots[posix_key] = self._file_hash(abs_path)
             except OSError:
                 pass
 
@@ -932,7 +951,7 @@ class CPGBuilder:
             warnings.warn(f"Cannot read {file_path}: {e}", stacklevel=2)
             return
 
-        self._parse_and_visit(source_bytes, file_path, visitor)
+        self._parse_and_visit(source_bytes, self._normalize_path(file_path), visitor)
 
     def _process_source(
         self, source: bytes, filename: str, language: str | None, registry: Any
@@ -955,7 +974,7 @@ class CPGBuilder:
             logger.debug("No visitor for %s (language=%s), skipping", filename, language)
             return
 
-        self._parse_and_visit(source, Path(filename), visitor)
+        self._parse_and_visit(source, self._normalize_path(Path(filename)), visitor)
 
     def _parse_and_visit(self, source: bytes, file_path: Path, visitor: Any) -> None:
         """Run the parse and visit phases for one file."""

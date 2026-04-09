@@ -242,3 +242,84 @@ class TestBuild:
         builder._cpg.node(mod_id)._tree_node = "fake"
         cpg = builder.build()
         assert cpg.node(mod_id)._tree_node is None
+
+
+FIXTURES = Path(__file__).resolve().parent.parent / "fixtures" / "python"
+
+
+class TestRelativeRoot:
+    """CPGBuilder(relative_root=...) produces relative paths in node IDs and locations."""
+
+    def test_node_ids_contain_relative_paths(self):
+        cpg = (
+            CPGBuilder(relative_root=FIXTURES)
+            .add_file(FIXTURES / "simple_function.py")
+            .build()
+        )
+        for node in cpg.nodes():
+            node_id_str = str(node.id)
+            # Should NOT contain the absolute fixtures path
+            assert str(FIXTURES) not in node_id_str, (
+                f"Node ID should use relative paths, got: {node_id_str}"
+            )
+
+    def test_locations_are_relative(self):
+        cpg = (
+            CPGBuilder(relative_root=FIXTURES)
+            .add_file(FIXTURES / "simple_function.py")
+            .build()
+        )
+        func_nodes = [n for n in cpg.nodes(kind=NodeKind.FUNCTION)]
+        assert len(func_nodes) >= 1
+        for node in func_nodes:
+            assert node.location is not None
+            # The file path should be relative (just the filename)
+            assert not node.location.file.is_absolute(), (
+                f"Location file should be relative, got: {node.location.file}"
+            )
+
+    def test_files_list_is_relative(self):
+        cpg = (
+            CPGBuilder(relative_root=FIXTURES)
+            .add_file(FIXTURES / "simple_function.py")
+            .build()
+        )
+        for f in cpg.files:
+            assert not f.is_absolute(), f"files list should be relative, got: {f}"
+
+    def test_default_uses_absolute_paths(self):
+        cpg = (
+            CPGBuilder()
+            .add_file(FIXTURES / "simple_function.py")
+            .build()
+        )
+        mod = next(cpg.nodes(kind=NodeKind.MODULE))
+        assert mod.location is not None
+        assert mod.location.file.is_absolute()
+
+    def test_relative_root_with_directory(self):
+        cpg = (
+            CPGBuilder(relative_root=FIXTURES)
+            .add_directory(FIXTURES)
+            .build()
+        )
+        for node in cpg.nodes(kind=NodeKind.MODULE):
+            assert node.location is not None
+            assert not node.location.file.is_absolute(), (
+                f"Module {node.name} has absolute path: {node.location.file}"
+            )
+
+    def test_json_roundtrip_with_relative_paths(self):
+        from treeloom.export.json import from_json, to_json
+
+        cpg = (
+            CPGBuilder(relative_root=FIXTURES)
+            .add_file(FIXTURES / "simple_function.py")
+            .build()
+        )
+        restored = from_json(to_json(cpg))
+        assert restored.node_count == cpg.node_count
+        assert restored.edge_count == cpg.edge_count
+        for node in restored.nodes(kind=NodeKind.FUNCTION):
+            assert node.location is not None
+            assert not node.location.file.is_absolute()
