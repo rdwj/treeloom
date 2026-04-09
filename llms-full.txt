@@ -1,6 +1,6 @@
 # treeloom
 
-> Language-agnostic Code Property Graph library for Python. Parses source code via tree-sitter, builds a unified graph (AST + control flow + data flow + call graph), and provides taint analysis, pattern matching, and visualization. Supports Python, JavaScript, TypeScript, Go, Java, C, C++, and Rust. 1123 tests. Latest release: 0.3.0 (main branch includes additional unreleased features).
+> Language-agnostic Code Property Graph library for Python. Parses source code via tree-sitter, builds a unified graph (AST + control flow + data flow + call graph), and provides taint analysis, pattern matching, and visualization. Supports Python, JavaScript, TypeScript, Go, Java, C, C++, and Rust. 1144 tests. Latest release: 0.4.1. (main branch includes additional unreleased features).
 
 All public types are importable from the top-level `treeloom` package. Install with `pip install treeloom[languages]` for all grammar packages, or `pip install treeloom` for core only (no parsing without grammars).
 
@@ -45,6 +45,7 @@ class CPGBuilder:
         registry: LanguageRegistry | None = None,
         progress: BuildProgressCallback | None = None,
         timeout: float | None = None,
+        relative_root: Path | None = None,
     ) -> None
     def add_file(self, path: Path) -> CPGBuilder
     def add_directory(self, path: Path, exclude: list[str] | None = None) -> CPGBuilder
@@ -451,6 +452,8 @@ treeloom edges cpg.json --source "user_input" --target "execute"
 treeloom edges cpg.json --kind calls --output-format csv --limit 100
 ```
 
+Table output includes `@ file:line` locations for source and target nodes. JSON output includes explicit `file` and `line` fields.
+
 `treeloom taint` -- YAML-driven taint analysis:
 
 ```
@@ -526,7 +529,15 @@ treeloom completions zsh >> ~/.zshrc
 treeloom completions fish > ~/.config/fish/completions/treeloom.fish
 ```
 
-`treeloom config` -- show resolved configuration.
+`treeloom config` -- show resolved configuration:
+
+```
+treeloom config -- show resolved configuration
+treeloom config --init -- create .treeloom.yaml in CWD (warns if directory doesn't appear to be a project root)
+treeloom config --set KEY VALUE -- set a config key (lists valid keys on error)
+treeloom config --unset KEY -- remove a config key (lists valid keys on error)
+treeloom config --global -- operate on user-level config (~/.config/treeloom/config.yaml)
+```
 
 ## YAML Schemas
 
@@ -613,6 +624,6 @@ edge_kind: data_flows_to     # optional; omit to traverse all edge types
 - **Backend-agnostic**: The public API never leaks NetworkX types. All return types are treeloom's own dataclasses and Python builtins.
 - **Stdlib propagation models**: `load_models(["python-stdlib"])` returns `TaintPropagator` instances for common stdlib functions. Pass to `TaintPolicy(propagators=...)`. Use `list_builtin_models()` to discover available model names. Models are YAML in `src/treeloom/models/builtin/`.
 - **Incremental rebuild**: `CPGBuilder.rebuild(changed=[path])` re-parses only listed files; pass `changed=None` for automatic SHA-256-based change detection. `remove_node()` cascades to remove all touching edges. Annotations on unchanged nodes are preserved across rebuilds.
-- **Type inference is best-effort**: Python visitor tracks simple constructor assignments (`d = Dog()`) and sets `inferred_type` on VARIABLE nodes, `receiver_inferred_type` on CALL nodes. Class `attrs["bases"]` lists base class names for MRO-based method resolution. No cross-module tracking, no complex expression inference, flat type map only.
+- **Type inference is best-effort**: Python visitor tracks simple constructor assignments (`d = Dog()`) and sets `inferred_type` on VARIABLE nodes, `receiver_inferred_type` on CALL nodes. Class `attrs["bases"]` lists base class names for MRO-based method resolution. No cross-module tracking, no complex expression inference, flat type map only. When the receiver is `self` or `cls`, the class is inferred from the enclosing class context. Calls to imported functions (via `from module import func`) are resolved by following the import map back to the original module.
 - **Field-sensitive taint via TaintLabel.field_path**: When set, the engine narrows object-level taint to field-level when flowing through attribute access edges (DATA_FLOWS_TO with `field_name` attr). Mismatching fields are filtered. Falls back to object-level when ambiguous.
 - **emit_data_flow accepts keyword attrs**: `emitter.emit_data_flow(src, tgt, field_name="x")` attaches metadata to DATA_FLOWS_TO edges. Used internally for field-sensitive taint tracking.

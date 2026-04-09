@@ -1,6 +1,6 @@
 # treeloom
 
-> Language-agnostic Code Property Graph library for Python. Parses source code via tree-sitter, builds a unified graph (AST + control flow + data flow + call graph), and provides taint analysis, pattern matching, and visualization. Supports Python, JavaScript, TypeScript, Go, Java, C, C++, and Rust. 1123 tests. Latest release: 0.3.0 (main branch includes additional unreleased features).
+> Language-agnostic Code Property Graph library for Python. Parses source code via tree-sitter, builds a unified graph (AST + control flow + data flow + call graph), and provides taint analysis, pattern matching, and visualization. Supports Python, JavaScript, TypeScript, Go, Java, C, C++, and Rust. 1144 tests. Latest release: 0.4.1. (main branch includes additional unreleased features).
 
 All public types are importable from the top-level `treeloom` package.
 
@@ -75,7 +75,7 @@ All operations are available from the `treeloom` command:
 - **Grammar packages are optional**: Core library works without them. Install `treeloom[languages]` for all grammars, or individual packages like `tree-sitter-python`.
 - **Stdlib propagation models**: `load_models(["python-stdlib"])` returns propagators for common stdlib functions. Pass them to `TaintPolicy(propagators=load_models(["python-stdlib"]))`. Use `list_builtin_models()` to see available model names.
 - **Incremental rebuild**: `CPGBuilder.rebuild(changed=[path])` only re-parses listed files. Pass `changed=None` for automatic SHA-256-based change detection. Annotations on unchanged nodes are preserved.
-- **Type inference is best-effort**: Python visitor tracks simple constructor assignments (`d = Dog()`) for `inferred_type` on VARIABLE nodes and `receiver_inferred_type` on CALL nodes. No cross-module tracking, no complex expression inference. Class `attrs["bases"]` lists base class names for MRO resolution.
+- **Type inference is best-effort**: Python visitor tracks simple constructor assignments (`d = Dog()`) for `inferred_type` on VARIABLE nodes and `receiver_inferred_type` on CALL nodes. No cross-module tracking, no complex expression inference. Class `attrs["bases"]` lists base class names for MRO resolution. When the receiver is `self` or `cls`, the class is inferred from the enclosing class context. Calls to imported functions (via `from module import func`) are resolved by following the import map back to the original module.
 - **Field-sensitive taint**: `TaintLabel.field_path` (str | None) tracks which field is tainted. Object-level taint narrows to field-level when flowing through attribute access edges with `field_name` attrs. Falls back to object-level when ambiguous.
 - **emit_data_flow accepts attrs**: `emitter.emit_data_flow(src, tgt, field_name="x")` attaches metadata to DATA_FLOWS_TO edges. Used by field-sensitive taint tracking.
 

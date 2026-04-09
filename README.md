@@ -10,11 +10,13 @@ A language-agnostic Code Property Graph (CPG) library for Python. treeloom parse
 - **Stdlib propagation models** -- YAML-based data flow models for Python stdlib (json, pickle, subprocess, os.path, etc.) loaded via `load_models()`
 - **Incremental rebuild** -- `CPGBuilder.rebuild()` re-parses only changed files, preserving unchanged nodes, edges, and annotations
 - **Type-aware call resolution** -- constructor tracking and MRO-based method dispatch for Python
+- **Import-following resolution** -- calls to imported functions resolve across file boundaries when the source module is in the CPG
 - **Pattern matching** -- chain-based pattern queries for finding code patterns across the graph
 - **Visualization** -- export to JSON, Graphviz DOT, or interactive HTML (Cytoscape.js)
 - **Consumer annotations** -- attach arbitrary metadata to nodes without modifying the structural graph
 - **Overlay system** -- inject visual styling for domain-specific visualization (e.g., security analysis results)
 - **Serialization** -- full round-trip JSON serialization including annotations
+- **Portable graphs** -- `CPGBuilder(relative_root=...)` stores relative file paths, making serialized graphs portable across machines
 
 ## Quick Start
 
@@ -213,8 +215,12 @@ mypy src/treeloom/
 - Edge queries (`treeloom edges`) now show file:line locations for source and target nodes in all output formats (table, JSON, CSV, TSV). JSON output includes explicit `file` and `line` fields.
 - `config --set` and `--unset` now list valid config keys when an unknown key is provided.
 - `config --init` warns when the current directory doesn't appear to be a project root and prints the resolved absolute path on success.
+- `self`/`cls` type inference: method calls on `self` and `cls` now resolve via MRO using the enclosing class context, significantly improving Python call resolution rates.
+- Import-following call resolution: calls to functions imported via `from module import func` now resolve when the source module is in the CPG.
+- Module-scope disambiguation: call resolution now walks the scope chain to match qualifiers against ancestor scopes (module → class → function).
+- `CPGBuilder(relative_root=Path(...))` stores all file paths relative to the given root, making serialized CPGs portable across machines.
 - License corrected to MIT across all project metadata.
-- 1131 tests
+- 1144 tests
 
 ### Version 0.4.0
 

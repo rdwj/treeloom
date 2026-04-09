@@ -259,12 +259,15 @@ class CPGBuilder:
         registry: LanguageRegistry | None = None,
         progress: BuildProgressCallback | None = None,
         timeout: float | None = None,
+        relative_root: Path | None = None,
     ) -> None
     def add_file(self, path: Path) -> CPGBuilder
     def add_directory(self, path: Path, exclude: list[str] | None = None) -> CPGBuilder
-    def add_source(self, source: bytes, filename: str, language: str) -> CPGBuilder
+    def add_source(self, source: bytes, filename: str, language: str | None = None) -> CPGBuilder
     def build(self) -> CodePropertyGraph
 ```
+
+The `relative_root` parameter, when set, causes all file paths in the CPG (node IDs, `SourceLocation.file`, `cpg.files`) to be stored relative to the given directory. This makes serialized graphs portable across machines. The root is resolved to an absolute path at construction time. Paths outside the root are stored as-is.
 
 **Build pipeline (inside `build()`):**
 
@@ -767,11 +770,11 @@ For each node of interest:
 ### Call resolution
 
 `resolve_calls` iterates over all CALL nodes in the CPG. For each:
-1. Look up the `target_name` attribute
-2. Search for FUNCTION nodes with matching `name`
-3. Handle qualified names: `module.func` -> look for FUNCTION named `func` inside MODULE named `module`
-4. Handle method calls: `obj.method()` -> look for FUNCTION named `method` inside CLASS definitions (best-effort, since we don't do full type inference)
-5. Return list of (call_node_id, function_node_id) pairs
+1. Try type-based MRO resolution: if `receiver_inferred_type` is set (including `self`/`cls` receivers, where the class is inferred from the enclosing class context), walk the class hierarchy to find a matching method.
+2. Fall back to name-based resolution via `_resolve_single_call`. When multiple candidates share the same name, prefer the one scoped inside the class or module matching the call qualifier (walks up the scope chain via BFS).
+3. Try short-name resolution: strip the qualifier from dotted calls (e.g., `module.func` → `func`) and re-try name-based resolution.
+4. Import-following: if the call target was imported (`from module import func`), locate the FUNCTION under its original module scope by matching the module name or stem.
+5. Return list of (call_node_id, function_node_id) pairs.
 
 
 ## Testing Strategy
