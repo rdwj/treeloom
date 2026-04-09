@@ -210,17 +210,21 @@ mypy src/treeloom/
 
 ## Changelog
 
+### Version 0.5.0
+
+- `self`/`cls` type inference: method calls on `self` and `cls` now resolve via MRO using the enclosing class context, significantly improving Python call resolution rates.
+- Import-following call resolution: calls to functions imported via `from module import func` now resolve when the source module is in the CPG.
+- Module-scope disambiguation: call resolution now walks the scope chain to match qualifiers against ancestor scopes (module → class → function).
+- `CPGBuilder(relative_root=Path(...))` stores all file paths relative to the given root, making serialized CPGs portable across machines.
+- 1144 tests
+
 ### Version 0.4.1
 
 - Edge queries (`treeloom edges`) now show file:line locations for source and target nodes in all output formats (table, JSON, CSV, TSV). JSON output includes explicit `file` and `line` fields.
 - `config --set` and `--unset` now list valid config keys when an unknown key is provided.
 - `config --init` warns when the current directory doesn't appear to be a project root and prints the resolved absolute path on success.
-- `self`/`cls` type inference: method calls on `self` and `cls` now resolve via MRO using the enclosing class context, significantly improving Python call resolution rates.
-- Import-following call resolution: calls to functions imported via `from module import func` now resolve when the source module is in the CPG.
-- Module-scope disambiguation: call resolution now walks the scope chain to match qualifiers against ancestor scopes (module → class → function).
-- `CPGBuilder(relative_root=Path(...))` stores all file paths relative to the given root, making serialized CPGs portable across machines.
 - License corrected to MIT across all project metadata.
-- 1144 tests
+- 1138 tests
 
 ### Version 0.4.0
 
