@@ -133,15 +133,24 @@ def run_config(args: argparse.Namespace, cfg: Config) -> int:
         if dest.exists():
             err(f"{dest} already exists")
             return 1
+        _project_markers = (
+            ".git", "pyproject.toml", "setup.py", "Cargo.toml",
+            "go.mod", "pom.xml", "package.json",
+        )
+        if not any((Path.cwd() / marker).exists() for marker in _project_markers):
+            err(
+                f"Warning: {Path.cwd()} does not appear to be a project root"
+                " (no .git, pyproject.toml, etc.)"
+            )
         _write_yaml(dest, {f.name: getattr(cfg, f.name) for f in fields(Config)})
-        err(f"Created {dest}")
+        err(f"Created {dest.resolve()}")
         return 0
 
     if args.set:
         key, raw_value = args.set
         valid_keys = {f.name for f in fields(Config)}
         if key not in valid_keys:
-            err(f"Unknown config key: {key}")
+            err(f"Unknown config key: {key}. Valid keys: {', '.join(sorted(valid_keys))}")
             return 1
         # Coerce value
         value: Any = raw_value
@@ -161,7 +170,7 @@ def run_config(args: argparse.Namespace, cfg: Config) -> int:
     if args.unset:
         valid_keys = {f.name for f in fields(Config)}
         if args.unset not in valid_keys:
-            err(f"Unknown config key: {args.unset}")
+            err(f"Unknown config key: {args.unset}. Valid keys: {', '.join(sorted(valid_keys))}")
             return 1
         target = _USER_CONFIG_PATH if args.use_global else _find_project_config()
         if target is None or not target.is_file():

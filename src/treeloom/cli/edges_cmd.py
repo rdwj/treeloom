@@ -56,6 +56,14 @@ def register(subparsers: argparse._SubParsersAction) -> None:  # type: ignore[ty
     p.set_defaults(func=run_cmd)
 
 
+def _loc_str(node: object) -> str:
+    """Return 'filename:line' for a node, or '?:?' if location is unavailable."""
+    loc = getattr(node, "location", None)
+    if loc is None:
+        return "?:?"
+    return f"{loc.file.name}:{loc.line}"
+
+
 def _parse_kinds(raw: list[str] | None) -> list[EdgeKind] | None:
     if raw is None:
         return None
@@ -126,8 +134,20 @@ def run_cmd(args: argparse.Namespace, _cfg: Config | None = None) -> int:
         data = [
             {
                 "kind": edge.kind.value,
-                "source": {"id": str(edge.source), "name": src.name, "kind": src.kind.value},
-                "target": {"id": str(edge.target), "name": tgt.name, "kind": tgt.kind.value},
+                "source": {
+                    "id": str(edge.source),
+                    "name": src.name,
+                    "kind": src.kind.value,
+                    "file": str(src.location.file.name) if src.location else None,
+                    "line": src.location.line if src.location else None,
+                },
+                "target": {
+                    "id": str(edge.target),
+                    "name": tgt.name,
+                    "kind": tgt.kind.value,
+                    "file": str(tgt.location.file.name) if tgt.location else None,
+                    "line": tgt.location.line if tgt.location else None,
+                },
                 "attrs": edge.attrs,
             }
             for edge, src, tgt in results
@@ -143,8 +163,8 @@ def run_cmd(args: argparse.Namespace, _cfg: Config | None = None) -> int:
         rows = [
             [
                 edge.kind.value,
-                f"{src.name} ({src.kind.value})",
-                f"{tgt.name} ({tgt.kind.value})",
+                f"{src.name} ({src.kind.value} @ {_loc_str(src)})",
+                f"{tgt.name} ({tgt.kind.value} @ {_loc_str(tgt)})",
             ]
             for edge, src, tgt in results
         ]
@@ -154,8 +174,8 @@ def run_cmd(args: argparse.Namespace, _cfg: Config | None = None) -> int:
         rows_dicts = [
             {
                 "kind": edge.kind.value,
-                "source": f"{src.name} ({src.kind.value})",
-                "target": f"{tgt.name} ({tgt.kind.value})",
+                "source": f"{src.name} ({src.kind.value} @ {_loc_str(src)})",
+                "target": f"{tgt.name} ({tgt.kind.value} @ {_loc_str(tgt)})",
             }
             for edge, src, tgt in results
         ]
