@@ -84,7 +84,7 @@ treeloom ships with built-in visitors for eight languages. Grammar packages are 
 
 ### Python
 
-The reference implementation. Python and Java share the most complete feature set, including type-based MRO resolution and import-following call resolution, where a `from module import func` import causes treeloom to search the original module scope when resolving calls to `func`. Async functions (`async def`) are handled as FUNCTION nodes with `is_async=True` in `attrs`. Match statements (`match`/`case`, Python 3.10+) are modeled as BRANCH nodes.
+The reference implementation. Python and Java share the most complete feature set, including type-based MRO resolution and import-following call resolution, where a `from module import func` import causes treeloom to search the original module scope when resolving calls to `func`. Type annotations are extracted from three sources — parameter annotations (`def foo(x: Dog):`), variable annotations (`x: Dog = ...`), and function return types (`def foo() -> Dog:`) — to populate the type map used for method call resolution. Generic type parameters are stripped (`list[str]` → `list`), and explicit annotations take priority over constructor inference. Async functions (`async def`) are handled as FUNCTION nodes with `is_async=True` in `attrs`. Match statements (`match`/`case`, Python 3.10+) are modeled as BRANCH nodes.
 
 ### JavaScript
 

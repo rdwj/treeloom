@@ -37,6 +37,7 @@ treeloom build PATH [OPTIONS]
 | `--language LANG` | Force a specific language visitor regardless of file extension. Useful for files with non-standard extensions. |
 | `--timeout SECONDS` | Abort the build if it exceeds this wall-clock time. Raises an error with a partial result message. |
 | `--include-source` | Store `source_text` for each node in `attrs`. Increases output size significantly; useful for visualization or downstream tools that need source snippets. |
+| `--relative-root DIR` | Store all file paths relative to this directory, making serialized CPGs portable across machines. Defaults to the build target directory (or the file's parent for single-file builds). |
 
 Examples:
 
@@ -414,7 +415,8 @@ treeloom config [OPTIONS]
 | Flag | Description |
 |------|-------------|
 | `--show` | Print the current configuration and its source file path. |
-| `--init` | Write a default configuration file if one does not already exist. |
+| `--init` | Write a default configuration file if one does not already exist. Aborts if the current directory doesn't look like a project root (no `.git`, `pyproject.toml`, etc.) unless `--force` is given. |
+| `--force`, `-f` | Override the project-root check when using `--init`. |
 | `--set KEY VALUE` | Set a configuration key to a value. Example: `--set default_output cpg.json`. |
 | `--unset KEY` | Remove a configuration key, reverting it to the default. |
 | `--global` | Apply `--set`/`--unset` to the global config file rather than the project-local one (`.treeloom.toml` in the current directory). |
