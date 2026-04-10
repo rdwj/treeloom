@@ -90,6 +90,13 @@ treeloom builds a Code Property Graph -- a single directed graph that unifies fo
 
 **Call graph layer.** Links call sites to their resolved function definitions. `CALLS` edges connect a call node to the function it invokes. Resolution is best-effort (no full type inference).
 
+## Documentation
+
+- [docs/](https://github.com/rdwj/treeloom/tree/main/docs) -- user-facing reference and integration guides
+- [research/](https://github.com/rdwj/treeloom/tree/main/research) -- CPG tooling landscape, testing reports, and investigation notes
+- [benchmarks/](https://github.com/rdwj/treeloom/tree/main/benchmarks) -- performance benchmark suite
+- [CLAUDE.md](https://github.com/rdwj/treeloom/blob/main/CLAUDE.md) -- full API specification (data model, algorithms, builder pipeline)
+
 ## API Overview
 
 | Class / Function       | Purpose                                              |

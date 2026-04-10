@@ -2,7 +2,7 @@
 
 treeloom is a language-agnostic Code Property Graph (CPG) library. It parses source code via tree-sitter, builds a unified graph (AST + control flow + data flow + call graph), and provides query and analysis APIs. Its primary consumer is sanicode (a security analysis tool at ~/Developer/sanicode), but it is a general-purpose library with no security-specific concepts.
 
-See `RESEARCH.md` for the full CPG tooling landscape and rationale for building treeloom rather than adopting Joern, CodeQL, or Fraunhofer's CPG.
+See `research/cpg-landscape.md` for the full CPG tooling landscape and rationale for building treeloom rather than adopting Joern, CodeQL, or Fraunhofer's CPG.
 
 ## Tech Stack
 
@@ -65,7 +65,8 @@ treeloom/
 │   └── test_export/
 ├── pyproject.toml
 ├── CLAUDE.md
-└── RESEARCH.md
+└── research/
+    └── cpg-landscape.md
 ```
 
 

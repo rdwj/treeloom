@@ -1,6 +1,6 @@
 # treeloom
 
-> Language-agnostic Code Property Graph library for Python. Parses source code via tree-sitter, builds a unified graph (AST + control flow + data flow + call graph), and provides taint analysis, pattern matching, and visualization. Supports Python, JavaScript, TypeScript, Go, Java, C, C++, and Rust. 1144 tests. Latest release: 0.4.1. (main branch includes additional unreleased features).
+> Language-agnostic Code Property Graph library for Python. Parses source code via tree-sitter, builds a unified graph (AST + control flow + data flow + call graph), and provides taint analysis, pattern matching, and visualization. Supports Python, JavaScript, TypeScript, Go, Java, C, C++, and Rust. 1144 tests. Latest release: 0.5.0.
 
 All public types are importable from the top-level `treeloom` package. Install with `pip install treeloom[languages]` for all grammar packages, or `pip install treeloom` for core only (no parsing without grammars).
 

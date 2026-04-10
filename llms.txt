@@ -1,6 +1,6 @@
 # treeloom
 
-> Language-agnostic Code Property Graph library for Python. Parses source code via tree-sitter, builds a unified graph (AST + control flow + data flow + call graph), and provides taint analysis, pattern matching, and visualization. Supports Python, JavaScript, TypeScript, Go, Java, C, C++, and Rust. 1144 tests. Latest release: 0.4.1. (main branch includes additional unreleased features).
+> Language-agnostic Code Property Graph library for Python. Parses source code via tree-sitter, builds a unified graph (AST + control flow + data flow + call graph), and provides taint analysis, pattern matching, and visualization. Supports Python, JavaScript, TypeScript, Go, Java, C, C++, and Rust. 1144 tests. Latest release: 0.5.0.
 
 All public types are importable from the top-level `treeloom` package.
 
@@ -79,7 +79,13 @@ All operations are available from the `treeloom` command:
 - **Field-sensitive taint**: `TaintLabel.field_path` (str | None) tracks which field is tainted. Object-level taint narrows to field-level when flowing through attribute access edges with `field_name` attrs. Falls back to object-level when ambiguous.
 - **emit_data_flow accepts attrs**: `emitter.emit_data_flow(src, tgt, field_name="x")` attaches metadata to DATA_FLOWS_TO edges. Used by field-sensitive taint tracking.
 
+## Documentation
+
+- [docs/](docs/README.md): User-facing reference and integration guides
+- [Sanicode integration guide](docs/sanicode-integration.md): Using treeloom for security analysis
+- [research/](research/): CPG tooling landscape, testing reports, investigation notes
+
 ## Optional
 
 - [pyproject.toml](pyproject.toml): Package metadata, dependencies, extras
-- [RESEARCH.md](RESEARCH.md): CPG tooling landscape and rationale for building treeloom
+- [CPG Landscape Research](research/cpg-landscape.md): CPG tooling landscape and rationale for building treeloom
