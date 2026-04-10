@@ -10,7 +10,9 @@ import pytest
 
 from treeloom.cli.build import run_build
 from treeloom.cli.config import Config
-from treeloom.cli.edges_cmd import run_cmd
+from treeloom.cli.edges_cmd import _loc_str, run_cmd
+from treeloom.model.location import SourceLocation
+from treeloom.model.nodes import CpgNode, NodeId, NodeKind
 
 
 @pytest.fixture()
@@ -43,6 +45,47 @@ def _make_args(cpg_file: Path, **overrides: object) -> argparse.Namespace:
     }
     defaults.update(overrides)
     return argparse.Namespace(**defaults)
+
+
+def _make_node(
+    node_id: str,
+    location: SourceLocation | None,
+    kind: NodeKind = NodeKind.FUNCTION,
+) -> CpgNode:
+    return CpgNode(id=NodeId(node_id), kind=kind, name="n", location=location)
+
+
+class TestLocStr:
+    """Unit tests for the _loc_str display helper."""
+
+    def test_with_location(self) -> None:
+        loc = SourceLocation(file=Path("src/foo.py"), line=42, column=0)
+        node = _make_node("function:src/foo.py:42:0:17", loc)
+        assert _loc_str(node) == "foo.py:42"
+
+    def test_location_uses_basename(self) -> None:
+        loc = SourceLocation(file=Path("a/b/c/bar.py"), line=7, column=3)
+        node = _make_node("function:a/b/c/bar.py:7:3:1", loc)
+        assert _loc_str(node) == "bar.py:7"
+
+    def test_no_location_falls_back_to_id(self) -> None:
+        # ID contains file/line info even when node.location is None
+        node = _make_node("function:src/foo.py:42:0:17", location=None)
+        assert _loc_str(node) == "foo.py:42"
+
+    def test_no_location_no_id_info_returns_question_marks(self) -> None:
+        # Synthetic node with no location; ID format is kind::::counter
+        node = _make_node("function::::3", location=None)
+        assert _loc_str(node) == "?:?"
+
+    def test_unknown_object_without_location_returns_question_marks(self) -> None:
+        # Arbitrary object with no location or id attributes at all
+        assert _loc_str(object()) == "?:?"
+
+    def test_id_fallback_uses_basename_only(self) -> None:
+        # Deep path in ID; basename should be extracted
+        node = _make_node("call:a/very/deep/path/mod.py:100:5:99", location=None)
+        assert _loc_str(node) == "mod.py:100"
 
 
 class TestEdgesCommand:

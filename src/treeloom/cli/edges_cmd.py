@@ -57,11 +57,29 @@ def register(subparsers: argparse._SubParsersAction) -> None:  # type: ignore[ty
 
 
 def _loc_str(node: object) -> str:
-    """Return 'filename:line' for a node, or '?:?' if location is unavailable."""
+    """Return 'filename:line' for a node.
+
+    Primary source: ``node.location`` (a ``SourceLocation``).
+    Fallback: parse the node ID string, whose format is
+    ``{kind}:{file}:{line}:{col}:{counter}``.  When both are unavailable
+    (synthetic nodes with no location), returns ``'?:?'``.
+    """
     loc = getattr(node, "location", None)
-    if loc is None:
-        return "?:?"
-    return f"{loc.file.name}:{loc.line}"
+    if loc is not None:
+        return f"{loc.file.name}:{loc.line}"
+
+    # Attempt to recover file/line from the node ID.
+    node_id = str(getattr(node, "id", ""))
+    # Expected format: kind:file:line:col:counter
+    # A locationless ID looks like:  kind::::counter  (empty file/line/col)
+    parts = node_id.split(":", 4)
+    if len(parts) == 5:
+        _kind, file_part, line_part, _col, _counter = parts
+        if file_part and line_part:
+            filename = Path(file_part).name
+            return f"{filename}:{line_part}"
+
+    return "?:?"
 
 
 def _parse_kinds(raw: list[str] | None) -> list[EdgeKind] | None:
