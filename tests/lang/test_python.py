@@ -1353,3 +1353,365 @@ class TestSourceText:
             assert "source_text" not in node.attrs, (
                 f"Node {node.name!r} has source_text without include_source"
             )
+
+
+class TestCoverageEdgeCases:
+    """Tests targeting specific uncovered lines in python.py."""
+
+    # -- Import-following with aliased from-import (lines 142-152) --------
+
+    def test_import_following_resolves_aliased_from_import(self):
+        """from pkg.utils import helper as h; h() should resolve to helper()
+        when both modules are in the CPG."""
+        lib_src = b"""
+def helper(data):
+    return data.strip()
+"""
+        caller_src = b"""
+from pkg.utils import helper as h
+
+def process(raw):
+    return h(raw)
+"""
+        cpg = (
+            CPGBuilder()
+            .add_source(lib_src, "utils.py", "python")
+            .add_source(caller_src, "caller.py", "python")
+            .build()
+        )
+        calls_edges = _edge_pairs(cpg, EdgeKind.CALLS)
+        assert ("h", "helper") in calls_edges, (
+            f"Expected h -> helper via import-following, got: {calls_edges}"
+        )
+
+    # -- MRO cycle detection (line 173) -----------------------------------
+
+    def test_mro_cycle_does_not_infinite_loop(self):
+        """When MRO encounters a cycle (A->B->A), the visited-set guard
+        must prevent infinite looping.  Exercise by looking up a method
+        that does NOT exist so the walk exhausts the entire cycle."""
+        source = b"""
+class A(B):
+    def method(self):
+        return 1
+
+class B(A):
+    pass
+
+def main():
+    a = A()
+    a.nonexistent()
+"""
+        cpg = CPGBuilder().add_source(source, "cycle.py", "python").build()
+        # a.nonexistent() should not resolve (no such method anywhere)
+        # and the build should complete without hanging
+        calls_edges = _edge_pairs(cpg, EdgeKind.CALLS)
+        nonexistent_resolved = [
+            (s, t) for s, t in calls_edges if "nonexistent" in s
+        ]
+        assert not nonexistent_resolved, (
+            "nonexistent() should not resolve in a cyclic hierarchy"
+        )
+
+    # -- Direct scope match for qualified calls (line 209) ----------------
+
+    def test_qualified_call_direct_scope_match(self):
+        """Worker.work(w) with multiple 'work' functions should resolve to
+        the one directly scoped in Worker (line 209)."""
+        source = b"""
+class Worker:
+    def work(self):
+        return 1
+
+def work():
+    return 2
+
+def main():
+    w = Worker()
+    Worker.work(w)
+"""
+        cpg = CPGBuilder().add_source(source, "direct_scope.py", "python").build()
+        calls_edges = _edge_pairs(cpg, EdgeKind.CALLS)
+        resolved = [(s, t) for s, t in calls_edges if "Worker.work" in s]
+        assert resolved, f"Expected Worker.work() to be resolved, got: {calls_edges}"
+
+    # -- Multi-level scope disambiguation (lines 211-216) -----------------
+
+    def test_qualified_call_multilevel_scope_walk(self):
+        """Outer.helper() where helper is in Inner (nested in Outer) should
+        resolve by walking up the scope chain: Inner -> Outer (match)."""
+        source = b"""
+class Outer:
+    class Inner:
+        def helper(self):
+            return 1
+
+def helper():
+    return 2
+
+def main():
+    o = Outer.Inner()
+    Outer.helper(o)
+"""
+        cpg = CPGBuilder().add_source(source, "nested_scope.py", "python").build()
+        calls_edges = _edge_pairs(cpg, EdgeKind.CALLS)
+        resolved = [(s, t) for s, t in calls_edges if "Outer.helper" in s]
+        assert resolved, f"Expected Outer.helper() to be resolved, got: {calls_edges}"
+        # Should resolve to Inner's helper (found by walking scope up to Outer)
+        target_scopes = []
+        for e in cpg.edges(kind=EdgeKind.CALLS):
+            src = cpg.node(e.source)
+            tgt = cpg.node(e.target)
+            if src and tgt and "Outer.helper" in src.name:
+                scope = cpg.scope_of(tgt.id)
+                target_scopes.append(scope.name if scope else None)
+        assert "Inner" in target_scopes, (
+            f"Expected helper in Inner scope, got: {target_scopes}"
+        )
+
+    # -- Dotted base class name (line 254) --------------------------------
+
+    def test_dotted_base_class_name(self):
+        """class Foo(module.Base) should record the dotted name in bases."""
+        source = b"""
+class Foo(module.Base):
+    def method(self):
+        return 1
+"""
+        cpg = CPGBuilder().add_source(source, "dotted_base.py", "python").build()
+        foo = next(n for n in cpg.nodes(kind=NodeKind.CLASS) if n.name == "Foo")
+        bases = foo.attrs.get("bases", [])
+        assert "module.Base" in bases, (
+            f"Expected dotted base class name 'module.Base', got bases={bases}"
+        )
+
+    # -- Aliased from-import (lines 498-504) ------------------------------
+
+    def test_from_import_aliased_name(self):
+        """from module import X as Y should record aliases={X: Y}."""
+        source = b"""
+from collections import OrderedDict as OD
+"""
+        cpg = CPGBuilder().add_source(source, "aliased_from.py", "python").build()
+        imports = list(cpg.nodes(kind=NodeKind.IMPORT))
+        assert len(imports) == 1
+        imp = imports[0]
+        assert imp.attrs.get("is_from") is True
+        assert imp.attrs.get("module") == "collections"
+        assert "OrderedDict" in imp.attrs.get("names", [])
+        assert imp.attrs.get("aliases") == {"OrderedDict": "OD"}
+
+    # -- Subscript with attribute/subscript receiver (lines 749-752) ------
+
+    def test_subscript_on_attribute_receiver(self):
+        """obj.items[0] should wire data flow from obj.items to the subscript."""
+        source = b"""
+def process(obj):
+    x = obj.items[0]
+    return x
+"""
+        cpg = CPGBuilder().add_source(source, "sub_attr.py", "python").build()
+        pairs = _edge_pairs(cpg, EdgeKind.DATA_FLOWS_TO)
+        attr_to_sub = [
+            (s, t) for s, t in pairs if "items" in s and "[" in t
+        ]
+        assert attr_to_sub, (
+            f"Expected obj.items -> obj.items[0] data flow, got: {pairs}"
+        )
+
+    def test_nested_subscript_receiver(self):
+        """data['a']['b'] should wire data flow from the outer subscript."""
+        source = b"""
+def get(data):
+    x = data['a']['b']
+    return x
+"""
+        cpg = CPGBuilder().add_source(source, "nested_sub.py", "python").build()
+        pairs = _edge_pairs(cpg, EdgeKind.DATA_FLOWS_TO)
+        data_to_inner = [(s, t) for s, t in pairs if s == "data" and "[" in t]
+        assert data_to_inner, (
+            f"Expected data -> data['a'] flow, got: {pairs}"
+        )
+
+    # -- Percent formatting (lines 764-795) -------------------------------
+
+    def test_percent_format_detected(self):
+        """'%s' % var should create a % pseudo-call node with data flow."""
+        source = b"""
+def fmt(val):
+    result = "hello %s" % val
+    return result
+"""
+        cpg = CPGBuilder().add_source(source, "pct_fmt.py", "python").build()
+        calls = _node_names(cpg, NodeKind.CALL)
+        assert "%" in calls, (
+            f"Expected % pseudo-call node, got calls: {calls}"
+        )
+        pairs = _edge_pairs(cpg, EdgeKind.DATA_FLOWS_TO)
+        val_to_pct = [(s, t) for s, t in pairs if s == "val" and t == "%"]
+        assert val_to_pct, (
+            f"Expected 'val' -> '%' data flow, got: {pairs}"
+        )
+
+    # -- Parenthesized expression (lines 810-812) -------------------------
+
+    def test_parenthesized_expression_propagates(self):
+        """x = (a) should propagate data flow through parenthesized expr."""
+        source = b"""
+def compute(a, b):
+    x = (a)
+    return x
+"""
+        cpg = CPGBuilder().add_source(source, "paren_expr.py", "python").build()
+        pairs = _edge_pairs(cpg, EdgeKind.DATA_FLOWS_TO)
+        a_to_x = [(s, t) for s, t in pairs if s == "a" and t == "x"]
+        assert a_to_x, (
+            f"Expected 'a' -> 'x' via parenthesized expression, got: {pairs}"
+        )
+
+    # -- Keyword argument data flow (line 815-820) ------------------------
+
+    def test_keyword_arg_flows_to_call(self):
+        """func(key=val) where val is a known variable should flow to the call."""
+        source = b"""
+def run(data):
+    result = process(key=data)
+    return result
+"""
+        cpg = CPGBuilder().add_source(source, "kw_flow.py", "python").build()
+        pairs = _edge_pairs(cpg, EdgeKind.DATA_FLOWS_TO)
+        data_to_call = [(s, t) for s, t in pairs if s == "data" and t == "process"]
+        assert data_to_call, (
+            f"Expected 'data' -> 'process' via keyword arg, got: {pairs}"
+        )
+
+    # -- Dictionary splat data flow (lines 823-828) -----------------------
+
+    def test_dict_splat_unknown_var(self):
+        """func(**unknown_var) where unknown_var is not in defined_vars
+        should not crash."""
+        source = b"""
+def run():
+    process(**unknown_var)
+"""
+        cpg = CPGBuilder().add_source(source, "splat_unknown.py", "python").build()
+        calls = _node_names(cpg, NodeKind.CALL)
+        assert "process" in calls
+
+    # -- Dictionary comprehension (lines 850-859) -------------------------
+
+    def test_dict_comprehension(self):
+        """Calls inside dict comprehension iterables should be visited."""
+        source = b"""
+def transform(items):
+    result = {k: v for k, v in get_pairs(items)}
+    return result
+"""
+        cpg = CPGBuilder().add_source(source, "dict_comp.py", "python").build()
+        calls = _node_names(cpg, NodeKind.CALL)
+        assert "get_pairs" in calls, (
+            f"Expected get_pairs() inside dict comprehension, got: {calls}"
+        )
+
+    # -- Parameter extraction for typed/splat/default params (1085-1109) --
+
+    @pytest.mark.parametrize(
+        "signature,expected_params",
+        [
+            ("def f(x: int, y: str): pass", {"x", "y"}),
+            ("def f(*args): pass", {"*args"}),
+            ("def f(**kwargs): pass", {"**kwargs"}),
+            ("def f(x=5, y='hi'): pass", {"x", "y"}),
+            ("def f(a, *args, **kwargs): pass", {"a", "*args", "**kwargs"}),
+        ],
+        ids=["typed", "splat", "dict_splat", "default", "mixed"],
+    )
+    def test_param_extraction_variants(self, signature, expected_params):
+        """Various parameter syntaxes should all be extracted correctly."""
+        source = signature.encode()
+        cpg = CPGBuilder().add_source(source, "params.py", "python").build()
+        param_names = _node_names(cpg, NodeKind.PARAMETER)
+        assert param_names == expected_params, (
+            f"Expected params {expected_params}, got {param_names}"
+        )
+
+    # -- Typed self parameter (line 1101: break in _extract_single_param_name) --
+
+    def test_typed_self_parameter_excluded(self):
+        """def method(self: ClassName, x: int) should exclude typed self."""
+        source = b"""
+class MyClass:
+    def method(self: MyClass, x: int):
+        pass
+"""
+        cpg = CPGBuilder().add_source(source, "typed_self.py", "python").build()
+        param_names = _node_names(cpg, NodeKind.PARAMETER)
+        assert "self" not in param_names
+        assert "x" in param_names
+
+    # -- _extract_param_names (dead code, lines 1117-1145) ----------------
+
+    def test_extract_param_names_all_param_types(self):
+        """Directly call _extract_param_names to cover lines 1117-1145.
+        This function is unused by PythonVisitor but still defined."""
+        from treeloom.lang.builtin.python import PythonVisitor, _extract_param_names
+
+        visitor = PythonVisitor()
+        tree = visitor.parse(
+            b"def f(a, b: int, c=3, *args, **kwargs): pass",
+            "test.py",
+        )
+        func_node = tree.root_node.children[0]
+        params_node = func_node.child_by_field_name("parameters")
+        assert params_node is not None
+
+        names = _extract_param_names(
+            params_node, b"def f(a, b: int, c=3, *args, **kwargs): pass"
+        )
+        assert "a" in names
+        assert "b" in names
+        assert "c" in names
+        assert "*args" in names
+        assert "**kwargs" in names
+
+    def test_extract_param_names_excludes_self_cls(self):
+        """_extract_param_names should exclude self and cls."""
+        from treeloom.lang.builtin.python import PythonVisitor, _extract_param_names
+
+        visitor = PythonVisitor()
+        source = b"""
+class Foo:
+    def method(self, x):
+        pass
+"""
+        tree = visitor.parse(source, "test.py")
+        class_node = tree.root_node.children[0]
+        body = class_node.child_by_field_name("body")
+        method_node = body.children[0]
+        params = method_node.child_by_field_name("parameters")
+        assert params is not None
+
+        names = _extract_param_names(params, source)
+        assert "self" not in names
+        assert "x" in names
+
+    def test_extract_param_names_typed_self(self):
+        """_extract_param_names should exclude typed self: Foo."""
+        from treeloom.lang.builtin.python import PythonVisitor, _extract_param_names
+
+        visitor = PythonVisitor()
+        source = b"""
+class Foo:
+    def method(self: Foo, x: int):
+        pass
+"""
+        tree = visitor.parse(source, "test.py")
+        class_node = tree.root_node.children[0]
+        body = class_node.child_by_field_name("body")
+        method_node = body.children[0]
+        params = method_node.child_by_field_name("parameters")
+        assert params is not None
+
+        names = _extract_param_names(params, source)
+        assert "self" not in names
+        assert "x" in names

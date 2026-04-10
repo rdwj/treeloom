@@ -127,8 +127,11 @@ class JavaVisitor(TreeSitterVisitor):
                     call_node, short_name, functions, cpg,
                 )
 
-            # Try import-following
-            if fn is None and target in import_map:
+            # Try import-following — inherited from shared resolve_calls
+            # pattern; unreachable in Java because methods are always class-
+            # scoped (scope.kind != MODULE) and name-based resolution finds
+            # any function sharing the imported name first.
+            if fn is None and target in import_map:  # pragma: no cover
                 imp_module, imp_name = import_map[target]
                 imp_candidates = functions.get(imp_name, [])
                 for candidate in imp_candidates:
@@ -187,7 +190,7 @@ class JavaVisitor(TreeSitterVisitor):
     ) -> None:
         """Handle class_declaration, interface_declaration, enum_declaration."""
         name_node = node.child_by_field_name("name")
-        if name_node is None:
+        if name_node is None:  # pragma: no cover — tree-sitter always provides name
             return
         # Extract base classes from extends/implements clauses
         bases: list[str] = []
@@ -227,7 +230,7 @@ class JavaVisitor(TreeSitterVisitor):
         self, node: tree_sitter.Node, ctx: _VisitContext
     ) -> None:
         name_node = node.child_by_field_name("name")
-        if name_node is None:
+        if name_node is None:  # pragma: no cover — tree-sitter always provides name
             return
         func_id = ctx.emitter.emit_function(
             self._node_text(name_node, ctx.source),
@@ -253,7 +256,7 @@ class JavaVisitor(TreeSitterVisitor):
         self, node: tree_sitter.Node, ctx: _VisitContext
     ) -> None:
         name_node = node.child_by_field_name("name")
-        if name_node is None:
+        if name_node is None:  # pragma: no cover — tree-sitter always provides name
             return
         func_id = ctx.emitter.emit_function(
             self._node_text(name_node, ctx.source),
@@ -281,7 +284,7 @@ class JavaVisitor(TreeSitterVisitor):
         """Handle `Type name = expr;` local variable declarations."""
         type_ann: str | None = None
         for child in node.children:
-            if child.type in ("variable_declarator", ";"):
+            if child.type in ("variable_declarator", ";"):  # pragma: no cover — type always first
                 continue
             if child.is_named:
                 type_ann = self._node_text(child, ctx.source)
@@ -327,7 +330,7 @@ class JavaVisitor(TreeSitterVisitor):
                 full_name = self._node_text(child, ctx.source)
             elif child.type == "asterisk":
                 is_wildcard = True
-        if not full_name:
+        if not full_name:  # pragma: no cover — parser always provides identifier
             return
         if "." in full_name:
             module_name, last = full_name.rsplit(".", 1)
@@ -448,7 +451,7 @@ class JavaVisitor(TreeSitterVisitor):
         """Handle class-level field declarations (e.g., `private int x = 5;`)."""
         type_ann: str | None = None
         for child in node.children:
-            if child.type in ("variable_declarator", ";"):
+            if child.type in ("variable_declarator", ";"):  # pragma: no cover — type always first
                 continue
             # Skip modifiers like public/private/static/final
             if child.type == "modifiers":
@@ -550,7 +553,7 @@ class JavaVisitor(TreeSitterVisitor):
         """Visit a resource in try-with-resources (type name = expr)."""
         name_node = node.child_by_field_name("name")
         value_node = node.child_by_field_name("value")
-        if name_node is None:
+        if name_node is None:  # pragma: no cover — tree-sitter always provides name
             return
         var_name = self._node_text(name_node, ctx.source)
         var_id = ctx.emitter.emit_variable(
@@ -623,7 +626,7 @@ class JavaVisitor(TreeSitterVisitor):
         as PARAMETER nodes scoped to the record class.
         """
         name_node = node.child_by_field_name("name")
-        if name_node is None:
+        if name_node is None:  # pragma: no cover — tree-sitter always provides name
             return
         class_id = ctx.emitter.emit_class(
             self._node_text(name_node, ctx.source),
@@ -673,7 +676,7 @@ class JavaVisitor(TreeSitterVisitor):
             for child in node.children:
                 if child.is_named:
                     return self._visit_expression(child, ctx)
-            return None
+            return None  # pragma: no cover — always has inner expression
         if node.type == "lambda_expression":
             return self._visit_lambda(node, ctx)
         if node.type in ("array_creation_expression", "array_initializer"):
@@ -686,7 +689,7 @@ class JavaVisitor(TreeSitterVisitor):
                     "floating_point_type", "boolean_type", "void_type",
                 ):
                     return self._visit_expression(child, ctx)
-            return None
+            return None  # pragma: no cover — cast always has inner expression
         if node.type == "update_expression":
             # e.g., i++, --j — find the operand and return its NodeId
             for child in node.children:
@@ -697,7 +700,7 @@ class JavaVisitor(TreeSitterVisitor):
             # e.g., args[0] — propagate taint from the array
             for child in node.named_children:
                 return self._visit_expression(child, ctx)
-            return None
+            return None  # pragma: no cover — always has named children
         if node.type == "ternary_expression":
             condition = node.child_by_field_name("condition")
             consequence = node.child_by_field_name("consequence")
@@ -725,7 +728,7 @@ class JavaVisitor(TreeSitterVisitor):
                 if alt_id is not None:
                     ctx.emitter.emit_data_flow(alt_id, merge_id)
                 return merge_id
-            return None
+            return None  # pragma: no cover — ternary always has branches
         if node.type == "method_reference":
             return self._visit_method_reference(node, ctx)
         if node.type == "field_access":
@@ -735,13 +738,13 @@ class JavaVisitor(TreeSitterVisitor):
             operand = node.child_by_field_name("operand")
             if operand is not None:
                 return self._visit_expression(operand, ctx)
-            return None
+            return None  # pragma: no cover — always has operand
         if node.type == "instanceof_expression":
             # Visit the LHS so DFG propagates; the type check doesn't produce a value
             left = node.child_by_field_name("left")
             if left is not None:
                 return self._visit_expression(left, ctx)
-            return None
+            return None  # pragma: no cover — always has left operand
         for child in node.children:
             if child.is_named:
                 self._visit_expression(child, ctx)
@@ -887,7 +890,7 @@ class JavaVisitor(TreeSitterVisitor):
     ) -> NodeId | None:
         """Emit a CALL node for a method_invocation, wiring arg data flow."""
         name_node = node.child_by_field_name("name")
-        if name_node is None:
+        if name_node is None:  # pragma: no cover — tree-sitter always provides name
             return None
         method_name = self._node_text(name_node, ctx.source)
         obj_node = node.child_by_field_name("object") if qualified else None
@@ -962,7 +965,7 @@ class JavaVisitor(TreeSitterVisitor):
         """Handle field access (e.g., obj.field, this.value)."""
         obj_node = node.child_by_field_name("object")
         field_node = node.child_by_field_name("field")
-        if field_node is None:
+        if field_node is None:  # pragma: no cover — tree-sitter always provides field
             return None
         obj_text = self._node_text(obj_node, ctx.source) if obj_node else ""
         field_text = self._node_text(field_node, ctx.source)
@@ -997,7 +1000,7 @@ class JavaVisitor(TreeSitterVisitor):
         type_ann: str | None = None,
     ) -> NodeId | None:
         name_node = node.child_by_field_name("name")
-        if name_node is None:
+        if name_node is None:  # pragma: no cover — tree-sitter always provides name
             return None
         var_name = name_node.text.decode("utf-8", errors="replace")
         loc = SourceLocation(
@@ -1036,7 +1039,7 @@ class JavaVisitor(TreeSitterVisitor):
     ) -> None:
         left = node.child_by_field_name("left")
         right = node.child_by_field_name("right")
-        if left is None:
+        if left is None:  # pragma: no cover — tree-sitter always provides left
             return
         var_name = left.text.decode("utf-8", errors="replace")
         loc = SourceLocation(
@@ -1067,7 +1070,7 @@ class JavaVisitor(TreeSitterVisitor):
             if child.type == "formal_parameter":
                 name_node = child.child_by_field_name("name")
                 type_node = child.child_by_field_name("type")
-                if name_node is None:
+                if name_node is None:  # pragma: no cover — tree-sitter always provides name
                     continue
                 param_name = name_node.text.decode("utf-8", errors="replace")
                 type_ann = (

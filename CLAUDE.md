@@ -11,7 +11,7 @@ See `research/cpg-landscape.md` for the full CPG tooling landscape and rationale
 - Parsing: tree-sitter with per-language grammar packages
 - No external services, no network calls, fully offline
 - Build: Hatchling
-- Testing: pytest, 80%+ coverage target
+- Testing: pytest, 80%+ coverage target (100% for Java and Python visitors)
 
 ## Project Structure
 
