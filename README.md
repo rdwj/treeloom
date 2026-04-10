@@ -13,6 +13,7 @@ A language-agnostic Code Property Graph (CPG) library for Python. treeloom parse
 - **Import-following resolution** -- calls to imported functions resolve across file boundaries when the source module is in the CPG
 - **Pattern matching** -- chain-based pattern queries for finding code patterns across the graph
 - **Visualization** -- export to JSON, Graphviz DOT, or interactive HTML (Cytoscape.js)
+- **Source text spans** -- `end_location` on every node (Python visitor), optional `source_text` via `--include-source` for class/function nodes
 - **Consumer annotations** -- attach arbitrary metadata to nodes without modifying the structural graph
 - **Overlay system** -- inject visual styling for domain-specific visualization (e.g., security analysis results)
 - **Serialization** -- full round-trip JSON serialization including annotations
@@ -216,6 +217,15 @@ mypy src/treeloom/
 ```
 
 ## Changelog
+
+### Version 0.6.0
+
+- Source text spans: `CpgNode` gains an `end_location` field (populated by the Python visitor from tree-sitter end points). Optional `source_text` stored in node attrs when `CPGBuilder(include_source=True)` or `--include-source` CLI flag is set, for class and function nodes. Serialization is backward-compatible.
+- Per-phase build progress: build pipeline reports 5 numbered phases (Parsing, CFG, Call resolution, Function summaries, Inter-procedural DFG) with start/done messages, timing, and statistics. Function summary computation surfaced as its own visible phase.
+- Single-scan call resolution: FUNCTION and CALL node lists collected in one pass upfront, eliminating per-visitor redundant full-graph traversals.
+- Standalone documentation: getting started guide, Python library API guide, taint analysis walkthrough, language support matrix, and CLI reference for all 15 subcommands.
+- Documentation reorganization: research material moved to `research/`, standard repo artifacts bootstrapped.
+- 1163 tests
 
 ### Version 0.5.0
 
