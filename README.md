@@ -92,10 +92,10 @@ treeloom builds a Code Property Graph -- a single directed graph that unifies fo
 
 ## Documentation
 
-- [docs/](docs/README.md) -- user-facing reference and integration guides
-- [research/](research/) -- CPG tooling landscape, testing reports, and investigation notes
-- [benchmarks/](benchmarks/) -- performance benchmark suite
-- [CLAUDE.md](CLAUDE.md) -- full API specification (data model, algorithms, builder pipeline)
+- [docs/](https://github.com/rdwj/treeloom/tree/main/docs) -- user-facing reference and integration guides
+- [research/](https://github.com/rdwj/treeloom/tree/main/research) -- CPG tooling landscape, testing reports, and investigation notes
+- [benchmarks/](https://github.com/rdwj/treeloom/tree/main/benchmarks) -- performance benchmark suite
+- [CLAUDE.md](https://github.com/rdwj/treeloom/blob/main/CLAUDE.md) -- full API specification (data model, algorithms, builder pipeline)
 
 ## API Overview
 
