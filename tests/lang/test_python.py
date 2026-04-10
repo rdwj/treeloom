@@ -1649,69 +1649,23 @@ class MyClass:
         assert "self" not in param_names
         assert "x" in param_names
 
-    # -- _extract_param_names (dead code, lines 1117-1145) ----------------
+    # -- async function detection ------------------------------------------
 
-    def test_extract_param_names_all_param_types(self):
-        """Directly call _extract_param_names to cover lines 1117-1145.
-        This function is unused by PythonVisitor but still defined."""
-        from treeloom.lang.builtin.python import PythonVisitor, _extract_param_names
-
-        visitor = PythonVisitor()
-        tree = visitor.parse(
-            b"def f(a, b: int, c=3, *args, **kwargs): pass",
-            "test.py",
-        )
-        func_node = tree.root_node.children[0]
-        params_node = func_node.child_by_field_name("parameters")
-        assert params_node is not None
-
-        names = _extract_param_names(
-            params_node, b"def f(a, b: int, c=3, *args, **kwargs): pass"
-        )
-        assert "a" in names
-        assert "b" in names
-        assert "c" in names
-        assert "*args" in names
-        assert "**kwargs" in names
-
-    def test_extract_param_names_excludes_self_cls(self):
-        """_extract_param_names should exclude self and cls."""
-        from treeloom.lang.builtin.python import PythonVisitor, _extract_param_names
-
-        visitor = PythonVisitor()
-        source = b"""
-class Foo:
-    def method(self, x):
-        pass
+    def test_async_function_detected(self) -> None:
+        """async def should set is_async=True on the FUNCTION node."""
+        src = b"""
+async def fetch(url):
+    return url
 """
-        tree = visitor.parse(source, "test.py")
-        class_node = tree.root_node.children[0]
-        body = class_node.child_by_field_name("body")
-        method_node = body.children[0]
-        params = method_node.child_by_field_name("parameters")
-        assert params is not None
+        cpg = CPGBuilder().add_source(src, "test.py", "python").build()
+        func = next(n for n in cpg.nodes(kind=NodeKind.FUNCTION) if n.name == "fetch")
+        assert func.attrs.get("is_async") is True
 
-        names = _extract_param_names(params, source)
-        assert "self" not in names
-        assert "x" in names
-
-    def test_extract_param_names_typed_self(self):
-        """_extract_param_names should exclude typed self: Foo."""
-        from treeloom.lang.builtin.python import PythonVisitor, _extract_param_names
-
-        visitor = PythonVisitor()
-        source = b"""
-class Foo:
-    def method(self: Foo, x: int):
-        pass
+    def test_sync_function_not_async(self) -> None:
+        src = b"""
+def compute(x):
+    return x
 """
-        tree = visitor.parse(source, "test.py")
-        class_node = tree.root_node.children[0]
-        body = class_node.child_by_field_name("body")
-        method_node = body.children[0]
-        params = method_node.child_by_field_name("parameters")
-        assert params is not None
-
-        names = _extract_param_names(params, source)
-        assert "self" not in names
-        assert "x" in names
+        cpg = CPGBuilder().add_source(src, "test.py", "python").build()
+        func = next(n for n in cpg.nodes(kind=NodeKind.FUNCTION) if n.name == "compute")
+        assert func.attrs.get("is_async") is not True

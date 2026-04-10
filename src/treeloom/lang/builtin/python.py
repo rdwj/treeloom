@@ -300,7 +300,6 @@ class PythonVisitor(TreeSitterVisitor):
                         )
             elif child.type in (
                 "function_definition",
-                "async_function_definition",
                 "class_definition",
             ):
                 # Stash decorator names so _visit_function_definition can pick
@@ -312,12 +311,11 @@ class PythonVisitor(TreeSitterVisitor):
     def _visit_function_definition(
         self, node: tree_sitter.Node, ctx: _VisitContext
     ) -> None:
-        is_async = node.type == "async_function_definition"
-        # For async, the actual function_definition is sometimes nested
-        if is_async:  # pragma: no cover — current grammar folds async into function_definition
-            # In tree-sitter-python, async_function_definition wraps the tokens
-            # directly (async, def, name, parameters, :, body)
-            pass
+        # tree-sitter-python folds `async def` into a regular
+        # function_definition with an `async` child token.
+        is_async = any(
+            child.type == "async" for child in node.children
+        )
 
         name_node = node.child_by_field_name("name")
         if name_node is None:  # pragma: no cover — tree-sitter always provides function name
@@ -1056,7 +1054,6 @@ _NODE_HANDLERS: dict[str, Any] = {
     "class_definition": PythonVisitor._visit_class_definition,
     "decorated_definition": PythonVisitor._visit_decorated_definition,
     "function_definition": PythonVisitor._visit_function_definition,
-    "async_function_definition": PythonVisitor._visit_function_definition,
     "expression_statement": PythonVisitor._visit_expression_statement,
     "return_statement": PythonVisitor._visit_return_statement,
     "import_statement": PythonVisitor._visit_import_statement,
@@ -1108,38 +1105,3 @@ def _extract_single_param_name(
             if sub.type == "identifier":
                 return "**" + sub.text.decode("utf-8", errors="replace")
     return None
-
-
-def _extract_param_names(
-    params_node: tree_sitter.Node, source: bytes
-) -> list[str]:
-    """Extract parameter names from a tree-sitter parameters node."""
-    names: list[str] = []
-    for child in params_node.children:
-        if child.type == "identifier":
-            name = child.text.decode("utf-8", errors="replace")
-            if name != "self" and name != "cls":
-                names.append(name)
-        elif child.type == "default_parameter":
-            name_node = child.child_by_field_name("name")
-            if name_node:
-                name = name_node.text.decode("utf-8", errors="replace")
-                if name != "self" and name != "cls":
-                    names.append(name)
-        elif child.type == "typed_parameter":
-            # e.g., x: int
-            for sub in child.children:
-                if sub.type == "identifier":
-                    name = sub.text.decode("utf-8", errors="replace")
-                    if name != "self" and name != "cls":
-                        names.append(name)
-                    break
-        elif child.type == "list_splat_pattern":
-            for sub in child.children:
-                if sub.type == "identifier":
-                    names.append("*" + sub.text.decode("utf-8", errors="replace"))
-        elif child.type == "dictionary_splat_pattern":
-            for sub in child.children:
-                if sub.type == "identifier":
-                    names.append("**" + sub.text.decode("utf-8", errors="replace"))
-    return names
