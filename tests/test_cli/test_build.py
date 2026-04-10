@@ -344,3 +344,123 @@ class TestBuild:
             assert fn.get("end_location") is not None, (
                 f"Function {fn['name']!r} should have end_location"
             )
+
+
+class TestRelativeRoot:
+    """Tests for the --relative-root flag and its default behaviour."""
+
+    def test_explicit_relative_root_makes_paths_relative(
+        self,
+        fixture_dir: Path,
+        tmp_path: Path,
+        default_cfg: Config,
+    ) -> None:
+        """Passing --relative-root should store paths relative to that dir."""
+        out = tmp_path / "out.json"
+        args = argparse.Namespace(
+            path=fixture_dir / "simple_function.py",
+            output=out,
+            exclude=None,
+            quiet=True,
+            relative_root=fixture_dir,
+        )
+        rc = run_build(args, default_cfg)
+        assert rc == 0
+        data = json.loads(out.read_text())
+        files_in_cpg = {
+            n["location"]["file"]
+            for n in data["nodes"]
+            if n.get("location")
+        }
+        # Every stored path should be relative (no leading '/').
+        for f in files_in_cpg:
+            assert not f.startswith("/"), (
+                f"Expected relative path, got absolute: {f!r}"
+            )
+        assert any("simple_function.py" in f for f in files_in_cpg)
+
+    def test_default_relative_root_for_single_file(
+        self,
+        fixture_dir: Path,
+        tmp_path: Path,
+        default_cfg: Config,
+    ) -> None:
+        """Without --relative-root, a single-file build defaults to file's parent dir."""
+        out = tmp_path / "out.json"
+        args = argparse.Namespace(
+            path=fixture_dir / "simple_function.py",
+            output=out,
+            exclude=None,
+            quiet=True,
+        )
+        rc = run_build(args, default_cfg)
+        assert rc == 0
+        data = json.loads(out.read_text())
+        files_in_cpg = {
+            n["location"]["file"]
+            for n in data["nodes"]
+            if n.get("location")
+        }
+        for f in files_in_cpg:
+            assert not f.startswith("/"), (
+                f"Expected relative path, got absolute: {f!r}"
+            )
+
+    def test_default_relative_root_for_directory(
+        self,
+        fixture_dir: Path,
+        tmp_path: Path,
+        default_cfg: Config,
+    ) -> None:
+        """Without --relative-root, a directory build defaults to the target dir."""
+        out = tmp_path / "out.json"
+        args = argparse.Namespace(
+            path=fixture_dir,
+            output=out,
+            exclude=None,
+            quiet=True,
+        )
+        rc = run_build(args, default_cfg)
+        assert rc == 0
+        data = json.loads(out.read_text())
+        files_in_cpg = {
+            n["location"]["file"]
+            for n in data["nodes"]
+            if n.get("location")
+        }
+        for f in files_in_cpg:
+            assert not f.startswith("/"), (
+                f"Expected relative path, got absolute: {f!r}"
+            )
+        # Paths should be bare filenames, not prefixed with the fixture dir name.
+        assert any(f == "simple_function.py" for f in files_in_cpg), (
+            f"Expected bare 'simple_function.py', got: {files_in_cpg}"
+        )
+
+    def test_explicit_relative_root_none_means_auto(
+        self,
+        fixture_dir: Path,
+        tmp_path: Path,
+        default_cfg: Config,
+    ) -> None:
+        """relative_root=None in Namespace triggers the auto-derive logic (same as omitting)."""
+        out = tmp_path / "out.json"
+        args = argparse.Namespace(
+            path=fixture_dir,
+            output=out,
+            exclude=None,
+            quiet=True,
+            relative_root=None,
+        )
+        rc = run_build(args, default_cfg)
+        assert rc == 0
+        data = json.loads(out.read_text())
+        files_in_cpg = {
+            n["location"]["file"]
+            for n in data["nodes"]
+            if n.get("location")
+        }
+        for f in files_in_cpg:
+            assert not f.startswith("/"), (
+                f"Expected relative path, got absolute: {f!r}"
+            )

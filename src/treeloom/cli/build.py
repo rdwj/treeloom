@@ -44,6 +44,13 @@ def register(subparsers: argparse._SubParsersAction) -> None:  # type: ignore[ty
         "--include-source", action="store_true",
         help="Include source text in CPG nodes (increases output size)",
     )
+    p.add_argument(
+        "--relative-root", type=Path, default=None, metavar="DIR",
+        help=(
+            "Store all paths relative to this directory, making CPGs portable "
+            "across machines. Defaults to the build target directory."
+        ),
+    )
     p.set_defaults(func=run_build)
 
 
@@ -59,6 +66,16 @@ def run_build(args: argparse.Namespace, cfg: Config) -> int:
     languages: list[str] | None = getattr(args, "languages", None)
     timeout: float | None = getattr(args, "timeout", None)
     include_source: bool = getattr(args, "include_source", False)
+
+    # Determine relative_root: explicit flag wins; otherwise default to the
+    # build target directory so that serialized CPGs are portable by default.
+    relative_root_arg: Path | None = getattr(args, "relative_root", None)
+    if relative_root_arg is not None:
+        relative_root: Path = relative_root_arg.resolve()
+    elif path.is_dir():
+        relative_root = path
+    else:
+        relative_root = path.parent
 
     registry = LanguageRegistry.default()
 
@@ -86,7 +103,7 @@ def run_build(args: argparse.Namespace, cfg: Config) -> int:
 
     builder = CPGBuilder(
         registry=registry, progress=progress_cb, timeout=timeout,
-        include_source=include_source,
+        include_source=include_source, relative_root=relative_root,
     )
 
     if path.is_file():
