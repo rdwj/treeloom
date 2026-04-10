@@ -32,6 +32,14 @@ _LITERAL_TYPES: dict[str, str] = {
 }
 
 
+def _strip_generics(type_str: str) -> str:
+    """Strip generic parameters: 'list[str]' -> 'list', 'Dict[str, int]' -> 'Dict'."""
+    idx = type_str.find("[")
+    if idx != -1:
+        return type_str[:idx]
+    return type_str
+
+
 class PythonVisitor(TreeSitterVisitor):
     """Walks a Python tree-sitter parse tree and emits CPG nodes/edges."""
 
@@ -336,6 +344,19 @@ class PythonVisitor(TreeSitterVisitor):
             source_text=self._node_text(node, ctx.source),
         )
 
+        # Extract return type annotation: def foo() -> Dog:
+        return_type_node = node.child_by_field_name("return_type")
+        if return_type_node is None:
+            # Field name varies by grammar version; try manual search
+            for child in node.children:
+                if child.type == "type" and child.prev_sibling and child.prev_sibling.type == "->":
+                    return_type_node = child
+                    break
+        if return_type_node is not None:
+            return_type = _extract_type_text(return_type_node, ctx.source)
+            if return_type is not None:
+                ctx.func_return_types[func_name] = return_type
+
         # Now visit the body within the function scope
         ctx.scope_stack.append(func_id)
         ctx.defined_vars.push()
@@ -346,14 +367,19 @@ class PythonVisitor(TreeSitterVisitor):
         if params_node is not None:
             position = 0
             for child in params_node.children:
-                param_name = _extract_single_param_name(child, ctx.source)
-                if param_name is not None:
+                result = _extract_single_param_name(child, ctx.source)
+                if result is not None:
+                    param_name, type_ann = result
                     param_loc = self._location(child, ctx.file_path)
                     param_id = ctx.emitter.emit_parameter(
                         param_name, param_loc, func_id, position=position,
+                        type_annotation=type_ann,
                         end_location=self._end_location(child, ctx.file_path),
                     )
                     ctx.defined_vars[param_name] = param_id
+                    # Register parameter type for call resolution
+                    if type_ann is not None:
+                        ctx.var_types[param_name] = type_ann
                     position += 1
 
         body = node.child_by_field_name("body")
@@ -378,11 +404,26 @@ class PythonVisitor(TreeSitterVisitor):
         var_name = self._node_text(left, ctx.source)
         loc = self._location(left, ctx.file_path)
 
+        # Extract type annotation from annotated assignment: x: Dog = ...
+        # tree-sitter represents this as an assignment node with a `type` child
+        type_child = None
+        for child in node.children:
+            if child.type == "type":
+                type_child = child
+                break
+        annotation_type: str | None = None
+        if type_child is not None:
+            annotation_type = _extract_type_text(type_child, ctx.source)
+            if annotation_type is not None:
+                ctx.var_types[var_name] = annotation_type
+
         # Infer type from constructor call on RHS: x = Dog()
-        # Only for simple identifier LHS (not tuple unpacking, etc.)
-        inferred_type: str | None = None
+        # Explicit type annotations win — skip RHS inference when one is present
+        # (e.g. `x: Animal = Dog()` should resolve calls via Animal, not Dog).
+        inferred_type: str | None = annotation_type
         if (
-            left.type == "identifier"
+            annotation_type is None
+            and left.type == "identifier"
             and right is not None
             and right.type == "call"
         ):
@@ -393,8 +434,16 @@ class PythonVisitor(TreeSitterVisitor):
                     if "." in call_name
                     else call_name
                 )
-                inferred_type = short
-                ctx.var_types[var_name] = short
+                # Check if a return type annotation is declared for this function.
+                # Return type annotations take priority over the bare call name
+                # because the call name may be a plain function (not a constructor).
+                ret_type = ctx.func_return_types.get(short)
+                if ret_type is not None:
+                    inferred_type = ret_type
+                    ctx.var_types[var_name] = ret_type
+                else:
+                    inferred_type = short
+                    ctx.var_types[var_name] = short
 
         var_id = ctx.emitter.emit_variable(
             var_name, loc, scope, inferred_type=inferred_type,
@@ -1026,6 +1075,7 @@ class _VisitContext:
         "pending_decorators",
         "var_types",
         "class_stack",
+        "func_return_types",
     )
 
     def __init__(
@@ -1042,6 +1092,9 @@ class _VisitContext:
         self.pending_decorators: list[str] = []
         self.var_types: dict[str, str] = {}
         self.class_stack: list[str] = []
+        # Keyed by short function name; file-scoped, so same-named
+        # functions in different classes will collide (last write wins).
+        self.func_return_types: dict[str, str] = {}
 
     @property
     def current_scope(self) -> NodeId:
@@ -1071,37 +1124,76 @@ def _make_calls_edge(call_id: NodeId, func_id: NodeId) -> Any:
     return CpgEdge(source=call_id, target=func_id, kind=EdgeKind.CALLS)
 
 
+def _extract_type_text(type_node: tree_sitter.Node, source: bytes) -> str | None:
+    """Extract the base type name from a tree-sitter ``type`` node.
+
+    Handles simple types (``int``), generic types (``list[str]`` → ``list``),
+    and qualified types (``module.Type`` → ``Type``).
+    """
+    text = type_node.text
+    if text is None:
+        return None
+    raw = text.decode("utf-8", errors="replace")
+    base = _strip_generics(raw)
+    # For qualified names like "module.ClassName", take the last component
+    if "." in base:
+        base = base.rsplit(".", 1)[-1]
+    return base if base else None
+
+
 def _extract_single_param_name(
     child: tree_sitter.Node, source: bytes
-) -> str | None:
-    """Extract a parameter name from a single tree-sitter parameters child node.
+) -> tuple[str, str | None] | None:
+    """Extract a parameter name and optional type annotation.
 
-    Returns None for nodes that aren't parameter declarations (punctuation,
-    'self', 'cls').
+    Returns ``(name, type_annotation)`` or ``None`` for non-parameter nodes
+    (punctuation, 'self', 'cls').  *type_annotation* is the base type string
+    with generics stripped, or ``None`` when no annotation is present.
     """
     if child.type == "identifier":
         name = child.text.decode("utf-8", errors="replace")
         if name not in ("self", "cls"):
-            return name
+            return (name, None)
     elif child.type == "default_parameter":
         name_node = child.child_by_field_name("name")
         if name_node:
             name = name_node.text.decode("utf-8", errors="replace")
             if name not in ("self", "cls"):
-                return name
+                return (name, None)
     elif child.type == "typed_parameter":
+        param_name: str | None = None
+        type_ann: str | None = None
         for sub in child.children:
-            if sub.type == "identifier":
+            if sub.type == "identifier" and param_name is None:
                 name = sub.text.decode("utf-8", errors="replace")
-                if name not in ("self", "cls"):
-                    return name
+                if name in ("self", "cls"):
+                    return None
+                param_name = name
+            elif sub.type == "type":
+                type_ann = _extract_type_text(sub, source)
+        if param_name is not None:
+            return (param_name, type_ann)
+    elif child.type == "typed_default_parameter":
+        param_name = None
+        type_ann = None
+        name_node = child.child_by_field_name("name")
+        if name_node:
+            name = name_node.text.decode("utf-8", errors="replace")
+            if name in ("self", "cls"):
+                return None
+            param_name = name
+        for sub in child.children:
+            if sub.type == "type":
+                type_ann = _extract_type_text(sub, source)
                 break
+        if param_name is not None:
+            return (param_name, type_ann)
     elif child.type == "list_splat_pattern":
         for sub in child.children:
             if sub.type == "identifier":
-                return "*" + sub.text.decode("utf-8", errors="replace")
+                return ("*" + sub.text.decode("utf-8", errors="replace"), None)
     elif child.type == "dictionary_splat_pattern":
         for sub in child.children:
             if sub.type == "identifier":
-                return "**" + sub.text.decode("utf-8", errors="replace")
+                return ("**" + sub.text.decode("utf-8", errors="replace"), None)
     return None

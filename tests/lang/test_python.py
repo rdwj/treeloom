@@ -1669,3 +1669,177 @@ def compute(x):
         cpg = CPGBuilder().add_source(src, "test.py", "python").build()
         func = next(n for n in cpg.nodes(kind=NodeKind.FUNCTION) if n.name == "compute")
         assert func.attrs.get("is_async") is not True
+
+
+class TestTypeAnnotations:
+    """Parameter/variable type annotations improve call resolution accuracy."""
+
+    @pytest.fixture()
+    def cpg(self):
+        return _build("type_annotations.py")
+
+    def test_parameter_type_annotation_emitted(self, cpg):
+        """animal: Dog should store type_annotation='Dog' on the PARAMETER node."""
+        animal_params = [
+            n for n in cpg.nodes(kind=NodeKind.PARAMETER) if n.name == "animal"
+        ]
+        assert len(animal_params) >= 1, "Expected a parameter named 'animal'"
+        assert any(
+            p.attrs.get("type_annotation") == "Dog" for p in animal_params
+        ), (
+            f"Expected type_annotation='Dog' on 'animal' param, "
+            f"got: {[p.attrs for p in animal_params]}"
+        )
+
+    def test_parameter_with_primitive_type_annotation(self, cpg):
+        """name: str should store type_annotation='str' on the PARAMETER node."""
+        name_params = [
+            n for n in cpg.nodes(kind=NodeKind.PARAMETER) if n.name == "name"
+        ]
+        assert any(
+            p.attrs.get("type_annotation") == "str" for p in name_params
+        ), (
+            f"Expected type_annotation='str' on 'name' param, "
+            f"got: {[p.attrs for p in name_params]}"
+        )
+
+    def test_annotated_variable_type_registered(self, cpg):
+        """pet: Dog = Dog() — the variable should have inferred_type='Dog'."""
+        pet_vars = [n for n in cpg.nodes(kind=NodeKind.VARIABLE) if n.name == "pet"]
+        assert pet_vars, "Expected a variable named 'pet'"
+        assert any(
+            v.attrs.get("inferred_type") == "Dog" for v in pet_vars
+        ), (
+            f"Expected inferred_type='Dog' on 'pet', "
+            f"got: {[v.attrs for v in pet_vars]}"
+        )
+
+    def test_annotated_variable_call_resolves_correctly(self, cpg):
+        """pet.speak() should resolve to Dog.speak (not Cat.speak)."""
+        dog_class = next(n for n in cpg.nodes(kind=NodeKind.CLASS) if n.name == "Dog")
+        dog_speak = next(
+            n for n in cpg.nodes(kind=NodeKind.FUNCTION)
+            if n.name == "speak" and n.scope == dog_class.id
+        )
+        speak_calls = [n for n in cpg.nodes(kind=NodeKind.CALL) if n.name == "pet.speak"]
+        assert speak_calls, "Expected a 'pet.speak' call node"
+        calls_edges = list(cpg.edges(kind=EdgeKind.CALLS))
+        assert any(
+            e.source == speak_calls[0].id and e.target == dog_speak.id
+            for e in calls_edges
+        ), (
+            f"Expected pet.speak() -> Dog.speak, got CALLS: "
+            f"{[(cpg.node(e.source).name, cpg.node(e.target).name) for e in calls_edges]}"
+        )
+
+    def test_other_annotated_variable_resolves_to_cat(self, cpg):
+        """other: Cat = Cat() — other.speak() should resolve to Cat.speak."""
+        cat_class = next(n for n in cpg.nodes(kind=NodeKind.CLASS) if n.name == "Cat")
+        cat_speak = next(
+            n for n in cpg.nodes(kind=NodeKind.FUNCTION)
+            if n.name == "speak" and n.scope == cat_class.id
+        )
+        speak_calls = [n for n in cpg.nodes(kind=NodeKind.CALL) if n.name == "other.speak"]
+        assert speak_calls, "Expected an 'other.speak' call node"
+        calls_edges = list(cpg.edges(kind=EdgeKind.CALLS))
+        assert any(
+            e.source == speak_calls[0].id and e.target == cat_speak.id
+            for e in calls_edges
+        ), (
+            f"Expected other.speak() -> Cat.speak, got CALLS: "
+            f"{[(cpg.node(e.source).name, cpg.node(e.target).name) for e in calls_edges]}"
+        )
+
+    def test_return_type_inference_for_assigned_variable(self, cpg):
+        """inferred = create_dog() should infer type 'Dog' from create_dog's -> Dog annotation."""
+        inferred_vars = [
+            n for n in cpg.nodes(kind=NodeKind.VARIABLE) if n.name == "inferred"
+        ]
+        assert inferred_vars, "Expected a variable named 'inferred'"
+        assert any(
+            v.attrs.get("inferred_type") == "Dog" for v in inferred_vars
+        ), (
+            f"Expected inferred_type='Dog' on 'inferred' (via create_dog -> Dog), "
+            f"got: {[v.attrs for v in inferred_vars]}"
+        )
+
+    def test_return_type_inferred_call_resolves_to_correct_method(self, cpg):
+        """inferred.fetch() should resolve to Dog.fetch (type inferred from create_dog's return type)."""
+        dog_class = next(n for n in cpg.nodes(kind=NodeKind.CLASS) if n.name == "Dog")
+        dog_fetch = next(
+            n for n in cpg.nodes(kind=NodeKind.FUNCTION)
+            if n.name == "fetch" and n.scope == dog_class.id
+        )
+        fetch_calls = [
+            n for n in cpg.nodes(kind=NodeKind.CALL) if n.name == "inferred.fetch"
+        ]
+        assert fetch_calls, "Expected an 'inferred.fetch' call node"
+        calls_edges = list(cpg.edges(kind=EdgeKind.CALLS))
+        assert any(
+            e.source == fetch_calls[0].id and e.target == dog_fetch.id
+            for e in calls_edges
+        ), (
+            f"Expected inferred.fetch() -> Dog.fetch, got CALLS: "
+            f"{[(cpg.node(e.source).name, cpg.node(e.target).name) for e in calls_edges]}"
+        )
+
+    def test_annotated_primitive_variable(self, cpg):
+        """count: int = 0 should emit a VARIABLE with inferred_type='int'."""
+        count_vars = [n for n in cpg.nodes(kind=NodeKind.VARIABLE) if n.name == "count"]
+        assert count_vars, "Expected a variable named 'count'"
+        assert any(
+            v.attrs.get("inferred_type") == "int" for v in count_vars
+        ), (
+            f"Expected inferred_type='int' on 'count', got: {[v.attrs for v in count_vars]}"
+        )
+
+    def test_annotated_generic_type_stripped(self, cpg):
+        """items: list[str] = [] should emit inferred_type='list' (generic stripped)."""
+        items_vars = [n for n in cpg.nodes(kind=NodeKind.VARIABLE) if n.name == "items"]
+        assert items_vars, "Expected a variable named 'items'"
+        assert any(
+            v.attrs.get("inferred_type") == "list" for v in items_vars
+        ), (
+            f"Expected inferred_type='list' on 'items' (list[str] -> list), "
+            f"got: {[v.attrs for v in items_vars]}"
+        )
+
+    def test_explicit_annotation_wins_over_constructor(self, cpg):
+        """base_animal: Dog = Cat() — annotation Dog should win over constructor Cat."""
+        dog_class = next(n for n in cpg.nodes(kind=NodeKind.CLASS) if n.name == "Dog")
+        dog_speak = next(
+            n for n in cpg.nodes(kind=NodeKind.FUNCTION)
+            if n.name == "speak" and n.scope == dog_class.id
+        )
+        base_calls = [
+            n for n in cpg.nodes(kind=NodeKind.CALL) if n.name == "base_animal.speak"
+        ]
+        assert base_calls, "Expected a 'base_animal.speak' call node"
+        calls_edges = list(cpg.edges(kind=EdgeKind.CALLS))
+        assert any(
+            e.source == base_calls[0].id and e.target == dog_speak.id
+            for e in calls_edges
+        ), (
+            f"Expected base_animal.speak() -> Dog.speak (annotation wins), got CALLS: "
+            f"{[(cpg.node(e.source).name, cpg.node(e.target).name) for e in calls_edges]}"
+        )
+
+    def test_parameter_type_used_for_method_resolution(self, cpg):
+        """In process(animal: Dog, ...), animal.speak() should resolve to Dog.speak."""
+        dog_class = next(n for n in cpg.nodes(kind=NodeKind.CLASS) if n.name == "Dog")
+        dog_speak = next(
+            n for n in cpg.nodes(kind=NodeKind.FUNCTION)
+            if n.name == "speak" and n.scope == dog_class.id
+        )
+        animal_speak_calls = [
+            n for n in cpg.nodes(kind=NodeKind.CALL) if n.name == "animal.speak"
+        ]
+        assert animal_speak_calls, "Expected an 'animal.speak' call node in process()"
+        calls_edges = list(cpg.edges(kind=EdgeKind.CALLS))
+        assert any(
+            e.source == animal_speak_calls[0].id and e.target == dog_speak.id
+            for e in calls_edges
+        ), (
+            f"Expected animal.speak() -> Dog.speak (via parameter annotation), got CALLS: "
+            f"{[(cpg.node(e.source).name, cpg.node(e.target).name) for e in calls_edges]}"
+        )
