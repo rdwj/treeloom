@@ -252,7 +252,13 @@ class TestDiffPathOptions:
     ) -> None:
         # With full-path matching, files in different dirs look like different files.
         # Copy the same source to two separate directories so the absolute paths differ.
+        # Build with relative_root=None so paths stay absolute (run_build auto-derives
+        # a relative root which would collapse both to "simple_function.py").
         import shutil
+
+        from treeloom.export.json import to_json
+        from treeloom.graph.builder import CPGBuilder
+
         src = FIXTURES / "simple_function.py"
         dir_a = tmp_path / "dir_a"
         dir_b = tmp_path / "dir_b"
@@ -262,8 +268,13 @@ class TestDiffPathOptions:
         src_b = dir_b / "simple_function.py"
         shutil.copy(src, src_a)
         shutil.copy(src, src_b)
-        cpg_a = _build_cpg(src_a, dir_a / "cpg.json", cfg)
-        cpg_b = _build_cpg(src_b, dir_b / "cpg.json", cfg)
+
+        cpg_a_path = dir_a / "cpg.json"
+        cpg_b_path = dir_b / "cpg.json"
+        cpg_a_path.write_text(to_json(CPGBuilder().add_file(src_a).build()))
+        cpg_b_path.write_text(to_json(CPGBuilder().add_file(src_b).build()))
+        cpg_a = cpg_a_path
+        cpg_b = cpg_b_path
 
         args = argparse.Namespace(
             before=cpg_a,

@@ -1764,7 +1764,7 @@ class TestTypeAnnotations:
         )
 
     def test_return_type_inferred_call_resolves_to_correct_method(self, cpg):
-        """inferred.fetch() should resolve to Dog.fetch (type inferred from create_dog's return type)."""
+        """inferred.fetch() resolves to Dog.fetch via create_dog return type."""
         dog_class = next(n for n in cpg.nodes(kind=NodeKind.CLASS) if n.name == "Dog")
         dog_fetch = next(
             n for n in cpg.nodes(kind=NodeKind.FUNCTION)
