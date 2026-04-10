@@ -606,3 +606,785 @@ class Hello {
         cpg = CPGBuilder().add_source(src, "Hello.java", "java").build()
         assert "Hello" in _names(cpg, NodeKind.CLASS)
         assert "main" in _names(cpg, NodeKind.FUNCTION)
+
+
+class TestFieldDeclaration:
+    """#87 — field_declaration handler."""
+
+    def test_field_variables_emitted(self) -> None:
+        src = b"""
+class Account {
+    private int balance = 100;
+    private String name;
+    public static final double RATE = 0.05;
+}
+"""
+        cpg = CPGBuilder().add_source(src, "Account.java", "java").build()
+        var_names = _names(cpg, NodeKind.VARIABLE)
+        assert "balance" in var_names
+        assert "name" in var_names
+        assert "RATE" in var_names
+
+    def test_field_with_initializer_has_dfg(self) -> None:
+        src = b"""
+class Foo {
+    private int x = 5;
+}
+"""
+        cpg = CPGBuilder().add_source(src, "Foo.java", "java").build()
+        pairs = _edge_pairs(cpg, EdgeKind.DATA_FLOWS_TO)
+        # The literal 5 should flow to x
+        assert any(t == "x" for _, t in pairs)
+
+    def test_multiple_fields(self) -> None:
+        src = b"""
+class Config {
+    private String host;
+    private int port = 8080;
+    private boolean ssl = true;
+}
+"""
+        cpg = CPGBuilder().add_source(src, "Config.java", "java").build()
+        var_names = _names(cpg, NodeKind.VARIABLE)
+        assert {"host", "port", "ssl"} <= var_names
+
+
+class TestSwitchExpression:
+    """#78 — switch_expression handler."""
+
+    def test_switch_branch_node(self) -> None:
+        src = b"""
+class Foo {
+    String test(int x) {
+        switch (x) {
+            case 1:
+                return "one";
+            case 2:
+                return "two";
+            default:
+                return "other";
+        }
+    }
+}
+"""
+        cpg = CPGBuilder().add_source(src, "Foo.java", "java").build()
+        branches = [
+            b for b in cpg.nodes(kind=NodeKind.BRANCH)
+            if b.attrs.get("branch_type") == "switch"
+        ]
+        assert len(branches) == 1
+
+    def test_switch_visits_case_bodies(self) -> None:
+        src = b"""
+class Foo {
+    void test(int x) {
+        switch (x) {
+            case 1:
+                helper("one");
+                break;
+            case 2:
+                helper("two");
+                break;
+        }
+    }
+    void helper(String s) {}
+}
+"""
+        cpg = CPGBuilder().add_source(src, "Foo.java", "java").build()
+        call_names = _names(cpg, NodeKind.CALL)
+        assert "helper" in call_names
+
+    def test_switch_with_variable_in_case(self) -> None:
+        src = b"""
+class Foo {
+    void test(int x) {
+        switch (x) {
+            case 1:
+                int result = compute();
+                break;
+        }
+    }
+    int compute() { return 42; }
+}
+"""
+        cpg = CPGBuilder().add_source(src, "Foo.java", "java").build()
+        assert "result" in _names(cpg, NodeKind.VARIABLE)
+
+
+class TestTryStatement:
+    """#79 — try_statement, try_with_resources_statement, catch_clause."""
+
+    def test_catch_exception_variable(self) -> None:
+        src = b"""
+class Foo {
+    void test() {
+        try {
+            riskyOp();
+        } catch (Exception e) {
+            log(e);
+        }
+    }
+}
+"""
+        cpg = CPGBuilder().add_source(src, "Foo.java", "java").build()
+        var_names = _names(cpg, NodeKind.VARIABLE)
+        assert "e" in var_names
+
+    def test_catch_body_visited(self) -> None:
+        src = b"""
+class Foo {
+    void test() {
+        try {
+            riskyOp();
+        } catch (Exception e) {
+            handleError(e);
+        }
+    }
+}
+"""
+        cpg = CPGBuilder().add_source(src, "Foo.java", "java").build()
+        call_names = _names(cpg, NodeKind.CALL)
+        assert "handleError" in call_names
+
+    def test_finally_body_visited(self) -> None:
+        src = b"""
+class Foo {
+    void test() {
+        try {
+            work();
+        } catch (Exception e) {
+        } finally {
+            cleanup();
+        }
+    }
+}
+"""
+        cpg = CPGBuilder().add_source(src, "Foo.java", "java").build()
+        call_names = _names(cpg, NodeKind.CALL)
+        assert "cleanup" in call_names
+
+    def test_try_with_resources_variable(self) -> None:
+        src = b"""
+class Foo {
+    void test() {
+        try (BufferedReader br = new BufferedReader(null)) {
+            String line = br.readLine();
+        } catch (Exception e) {}
+    }
+}
+"""
+        cpg = CPGBuilder().add_source(src, "Foo.java", "java").build()
+        var_names = _names(cpg, NodeKind.VARIABLE)
+        assert "br" in var_names
+        assert "line" in var_names
+
+    def test_try_with_resources_dfg(self) -> None:
+        src = b"""
+class Foo {
+    void test() {
+        try (BufferedReader br = new BufferedReader(null)) {
+            String line = br.readLine();
+        } catch (Exception e) {}
+    }
+}
+"""
+        cpg = CPGBuilder().add_source(src, "Foo.java", "java").build()
+        pairs = _edge_pairs(cpg, EdgeKind.DATA_FLOWS_TO)
+        # new BufferedReader -> br
+        assert any("BufferedReader" in s and t == "br" for s, t in pairs), (
+            f"expected new BufferedReader -> br, got: {pairs}"
+        )
+
+
+class TestDoStatement:
+    """#81 — do_statement handler."""
+
+    def test_do_while_loop_node(self) -> None:
+        src = b"""
+class Foo {
+    void test() {
+        int x = 0;
+        do {
+            x++;
+        } while (x < 10);
+    }
+}
+"""
+        cpg = CPGBuilder().add_source(src, "Foo.java", "java").build()
+        loops = [
+            n for n in cpg.nodes(kind=NodeKind.LOOP)
+            if n.attrs.get("loop_type") == "do_while"
+        ]
+        assert len(loops) == 1
+
+    def test_do_while_body_visited(self) -> None:
+        src = b"""
+class Foo {
+    void test() {
+        int count = 0;
+        do {
+            process(count);
+            count++;
+        } while (count < 5);
+    }
+}
+"""
+        cpg = CPGBuilder().add_source(src, "Foo.java", "java").build()
+        call_names = _names(cpg, NodeKind.CALL)
+        assert "process" in call_names
+
+
+class TestThrowStatement:
+    """#88 — throw_statement handler."""
+
+    def test_throw_constructor_emitted(self) -> None:
+        src = b"""
+class Foo {
+    void test(String msg) {
+        throw new IllegalArgumentException(msg);
+    }
+}
+"""
+        cpg = CPGBuilder().add_source(src, "Foo.java", "java").build()
+        call_names = _names(cpg, NodeKind.CALL)
+        assert any("IllegalArgumentException" in c for c in call_names)
+
+    def test_throw_dfg_from_variable(self) -> None:
+        src = b"""
+class Foo {
+    void test(String msg) {
+        throw new IllegalArgumentException(msg);
+    }
+}
+"""
+        cpg = CPGBuilder().add_source(src, "Foo.java", "java").build()
+        pairs = _edge_pairs(cpg, EdgeKind.DATA_FLOWS_TO)
+        assert any(s == "msg" and "IllegalArgumentException" in t for s, t in pairs), (
+            f"expected msg -> new IllegalArgumentException, got: {pairs}"
+        )
+
+
+class TestStaticInitializer:
+    """#91 — static_initializer handler."""
+
+    def test_static_init_calls_visited(self) -> None:
+        src = b"""
+class Registry {
+    static {
+        register("default");
+    }
+    static void register(String name) {}
+}
+"""
+        cpg = CPGBuilder().add_source(src, "Registry.java", "java").build()
+        call_names = _names(cpg, NodeKind.CALL)
+        assert "register" in call_names
+
+    def test_static_init_variables_visited(self) -> None:
+        src = b"""
+class Config {
+    static int counter;
+    static {
+        counter = 42;
+    }
+}
+"""
+        cpg = CPGBuilder().add_source(src, "Config.java", "java").build()
+        var_names = _names(cpg, NodeKind.VARIABLE)
+        assert "counter" in var_names
+
+
+class TestSynchronizedStatement:
+    """#91 — synchronized_statement handler."""
+
+    def test_synchronized_body_visited(self) -> None:
+        src = b"""
+class Foo {
+    void test() {
+        synchronized(this) {
+            update();
+        }
+    }
+}
+"""
+        cpg = CPGBuilder().add_source(src, "Foo.java", "java").build()
+        call_names = _names(cpg, NodeKind.CALL)
+        assert "update" in call_names
+
+    def test_synchronized_variable_in_body(self) -> None:
+        src = b"""
+class Foo {
+    void test() {
+        synchronized(this) {
+            int snapshot = getValue();
+        }
+    }
+}
+"""
+        cpg = CPGBuilder().add_source(src, "Foo.java", "java").build()
+        assert "snapshot" in _names(cpg, NodeKind.VARIABLE)
+
+
+class TestUpdateExpression:
+    """#90 — update_expression handling in _visit_expression."""
+
+    def test_update_returns_variable_id(self) -> None:
+        src = b"""
+class Foo {
+    void test() {
+        int i = 0;
+        i++;
+    }
+}
+"""
+        cpg = CPGBuilder().add_source(src, "Foo.java", "java").build()
+        assert "i" in _names(cpg, NodeKind.VARIABLE)
+
+
+class TestArrayAccess:
+    """#90 — array_access handling in _visit_expression."""
+
+    def test_array_access_propagates_taint(self) -> None:
+        src = b"""
+class Foo {
+    void test(String[] args) {
+        String first = args[0];
+    }
+}
+"""
+        cpg = CPGBuilder().add_source(src, "Foo.java", "java").build()
+        pairs = _edge_pairs(cpg, EdgeKind.DATA_FLOWS_TO)
+        # args should flow to first via array access
+        assert any(s == "args" and t == "first" for s, t in pairs), (
+            f"expected args -> first via array access, got: {pairs}"
+        )
+
+
+class TestTernaryExpression:
+    """#86 — ternary_expression handling in _visit_expression."""
+
+    def test_ternary_both_branches_flow(self) -> None:
+        src = b"""
+class Foo {
+    void test(boolean flag, String a, String b) {
+        String result = flag ? a : b;
+    }
+}
+"""
+        cpg = CPGBuilder().add_source(src, "Foo.java", "java").build()
+        pairs = _edge_pairs(cpg, EdgeKind.DATA_FLOWS_TO)
+        # Both branches should flow through the ternary merge to result
+        a_flows = any(s == "a" and "<ternary>" in t for s, t in pairs)
+        b_flows = any(s == "b" and "<ternary>" in t for s, t in pairs)
+        assert a_flows, f"expected a -> <ternary>, got: {pairs}"
+        assert b_flows, f"expected b -> <ternary>, got: {pairs}"
+        # Ternary merge flows to result
+        assert any("<ternary>" in s and t == "result" for s, t in pairs), (
+            f"expected <ternary> -> result, got: {pairs}"
+        )
+
+
+class TestMethodReference:
+    """#89 — method_reference handling in _visit_expression."""
+
+    def test_method_reference_emits_call(self) -> None:
+        src = b"""
+class Foo {
+    void test(java.util.List<String> items) {
+        items.stream().map(String::toUpperCase);
+    }
+}
+"""
+        cpg = CPGBuilder().add_source(src, "Foo.java", "java").build()
+        call_names = _names(cpg, NodeKind.CALL)
+        assert any("toUpperCase" in c for c in call_names), (
+            f"expected call containing toUpperCase, got: {call_names}"
+        )
+
+    def test_method_reference_target_name(self) -> None:
+        src = b"""
+class Foo {
+    void test(java.util.List<String> items) {
+        items.forEach(System.out::println);
+    }
+}
+"""
+        cpg = CPGBuilder().add_source(src, "Foo.java", "java").build()
+        call_names = _names(cpg, NodeKind.CALL)
+        assert any("println" in c for c in call_names)
+
+
+class TestFieldAccess:
+    """#85 — field_access handling in _visit_expression."""
+
+    def test_field_access_emits_variable(self) -> None:
+        src = b"""
+class Foo {
+    int value = 10;
+    int test() {
+        return this.value;
+    }
+}
+"""
+        cpg = CPGBuilder().add_source(src, "Foo.java", "java").build()
+        var_names = _names(cpg, NodeKind.VARIABLE)
+        assert "this.value" in var_names
+
+    def test_field_access_dfg_through_assignment(self) -> None:
+        src = b"""
+class Foo {
+    int value;
+    void test(int x) {
+        this.value = x;
+    }
+}
+"""
+        cpg = CPGBuilder().add_source(src, "Foo.java", "java").build()
+        pairs = _edge_pairs(cpg, EdgeKind.DATA_FLOWS_TO)
+        assert ("x", "this.value") in pairs, (
+            f"expected x -> this.value, got: {pairs}"
+        )
+
+
+class TestUnaryExpression:
+    """#92 — unary_expression handling in _visit_expression."""
+
+    def test_unary_propagates_operand(self) -> None:
+        src = b"""
+class Foo {
+    void test(boolean flag) {
+        boolean neg = !flag;
+    }
+}
+"""
+        cpg = CPGBuilder().add_source(src, "Foo.java", "java").build()
+        pairs = _edge_pairs(cpg, EdgeKind.DATA_FLOWS_TO)
+        assert any(s == "flag" and t == "neg" for s, t in pairs), (
+            f"expected flag -> neg via unary, got: {pairs}"
+        )
+
+
+class TestInstanceofExpression:
+    """#91 — instanceof_expression handling in _visit_expression."""
+
+    def test_instanceof_visits_lhs(self) -> None:
+        src = b"""
+class Foo {
+    void test(Object obj) {
+        if (obj instanceof String) {
+            process(obj);
+        }
+    }
+}
+"""
+        cpg = CPGBuilder().add_source(src, "Foo.java", "java").build()
+        call_names = _names(cpg, NodeKind.CALL)
+        assert "process" in call_names
+
+
+class TestRecordDeclaration:
+    """#92 — record_declaration handler."""
+
+    def test_record_emits_class(self) -> None:
+        src = b"""
+record Point(int x, int y) {
+    public String label() {
+        return "point";
+    }
+}
+"""
+        cpg = CPGBuilder().add_source(src, "Point.java", "java").build()
+        assert "Point" in _names(cpg, NodeKind.CLASS)
+
+    def test_record_method_visited(self) -> None:
+        src = b"""
+record Point(int x, int y) {
+    public String label() {
+        return "point";
+    }
+}
+"""
+        cpg = CPGBuilder().add_source(src, "Point.java", "java").build()
+        assert "label" in _names(cpg, NodeKind.FUNCTION)
+
+    def test_record_method_scoped_to_record(self) -> None:
+        src = b"""
+record Point(int x, int y) {
+    public String label() {
+        return "point";
+    }
+}
+"""
+        cpg = CPGBuilder().add_source(src, "Point.java", "java").build()
+        fn = next(n for n in cpg.nodes(kind=NodeKind.FUNCTION) if n.name == "label")
+        scope = cpg.scope_of(fn.id)
+        assert scope is not None
+        assert scope.name == "Point"
+        assert scope.kind == NodeKind.CLASS
+
+    def test_record_components_emitted(self) -> None:
+        src = b"""
+record Point(int x, int y) {}
+"""
+        cpg = CPGBuilder().add_source(src, "Point.java", "java").build()
+        params = {n.name: n for n in cpg.nodes(kind=NodeKind.PARAMETER)}
+        assert "x" in params
+        assert "y" in params
+        assert params["x"].attrs["type_annotation"] == "int"
+        assert params["y"].attrs["type_annotation"] == "int"
+
+
+class TestVarargsParameter:
+    """#82 — spread_parameter emits a PARAMETER node."""
+
+    def test_varargs_parameter_emitted(self) -> None:
+        src = b"""
+class Foo {
+    void log(String format, Object... args) {
+        System.out.println(format);
+    }
+}
+"""
+        cpg = CPGBuilder().add_source(src, "Foo.java", "java").build()
+        params = {n.name: n for n in cpg.nodes(kind=NodeKind.PARAMETER)}
+        assert "format" in params
+        assert "args" in params
+
+    def test_varargs_has_type_annotation(self) -> None:
+        src = b"""
+class Foo {
+    void log(String format, Object... args) {}
+}
+"""
+        cpg = CPGBuilder().add_source(src, "Foo.java", "java").build()
+        params = {n.name: n for n in cpg.nodes(kind=NodeKind.PARAMETER)}
+        assert params["args"].attrs["type_annotation"] == "Object..."
+
+    def test_varargs_position(self) -> None:
+        src = b"""
+class Foo {
+    void log(String format, Object... args) {}
+}
+"""
+        cpg = CPGBuilder().add_source(src, "Foo.java", "java").build()
+        params = {n.name: n for n in cpg.nodes(kind=NodeKind.PARAMETER)}
+        assert params["format"].attrs["position"] == 0
+        assert params["args"].attrs["position"] == 1
+
+    def test_varargs_in_defined_vars(self) -> None:
+        """Varargs param should be in defined_vars so DFG works."""
+        src = b"""
+class Foo {
+    void log(String format, Object... args) {
+        System.out.println(args);
+    }
+}
+"""
+        cpg = CPGBuilder().add_source(src, "Foo.java", "java").build()
+        pairs = _edge_pairs(cpg, EdgeKind.DATA_FLOWS_TO)
+        assert any(s == "args" for s, _ in pairs), (
+            f"expected args to appear in DFG, got: {pairs}"
+        )
+
+
+class TestForLoopConditionUpdate:
+    """#83 — for-loop condition and update visiting."""
+
+    def test_for_loop_condition_call_visited(self) -> None:
+        src = b"""
+class Foo {
+    void test() {
+        for (int i = 0; hasMore(i); i++) {
+            process(i);
+        }
+    }
+    boolean hasMore(int n) { return false; }
+}
+"""
+        cpg = CPGBuilder().add_source(src, "Foo.java", "java").build()
+        call_names = _names(cpg, NodeKind.CALL)
+        assert "hasMore" in call_names
+
+    def test_for_loop_update_visited(self) -> None:
+        """Update expression (i++) should be visited."""
+        src = b"""
+class Foo {
+    void test() {
+        int count = 0;
+        for (int i = 0; i < 10; i++) {
+            count = count + 1;
+        }
+    }
+}
+"""
+        cpg = CPGBuilder().add_source(src, "Foo.java", "java").build()
+        var_names = _names(cpg, NodeKind.VARIABLE)
+        assert "i" in var_names
+        assert "count" in var_names
+
+
+class TestLambdaFunctionNode:
+    """#84 — lambda_expression emits FUNCTION node with parameters."""
+
+    def test_lambda_emits_function_node(self) -> None:
+        src = b"""
+class Foo {
+    void test(java.util.List<String> items) {
+        items.forEach(x -> process(x));
+    }
+    void process(String s) {}
+}
+"""
+        cpg = CPGBuilder().add_source(src, "Foo.java", "java").build()
+        funcs = _names(cpg, NodeKind.FUNCTION)
+        # Should have test, process, and a lambda$N$N function
+        assert any(f.startswith("lambda$") for f in funcs), (
+            f"expected lambda function node, got: {funcs}"
+        )
+
+    def test_lambda_has_parameter(self) -> None:
+        src = b"""
+class Foo {
+    void test(java.util.List<String> items) {
+        items.forEach(x -> process(x));
+    }
+    void process(String s) {}
+}
+"""
+        cpg = CPGBuilder().add_source(src, "Foo.java", "java").build()
+        params = {n.name: n for n in cpg.nodes(kind=NodeKind.PARAMETER)}
+        assert "x" in params
+
+    def test_lambda_parameter_scoped_to_lambda(self) -> None:
+        src = b"""
+class Foo {
+    void test(java.util.List<String> items) {
+        items.forEach(x -> process(x));
+    }
+    void process(String s) {}
+}
+"""
+        cpg = CPGBuilder().add_source(src, "Foo.java", "java").build()
+        param = next(n for n in cpg.nodes(kind=NodeKind.PARAMETER) if n.name == "x")
+        scope = cpg.scope_of(param.id)
+        assert scope is not None
+        assert scope.kind == NodeKind.FUNCTION
+        assert scope.name.startswith("lambda$")
+
+    def test_lambda_body_visited(self) -> None:
+        src = b"""
+class Foo {
+    void test(java.util.List<String> items) {
+        items.forEach(x -> process(x));
+    }
+    void process(String s) {}
+}
+"""
+        cpg = CPGBuilder().add_source(src, "Foo.java", "java").build()
+        call_names = _names(cpg, NodeKind.CALL)
+        assert any("process" in c for c in call_names)
+
+    def test_lambda_with_block_body(self) -> None:
+        src = b"""
+class Foo {
+    void test(java.util.List<String> items) {
+        items.forEach(x -> {
+            String upper = x.toUpperCase();
+            System.out.println(upper);
+        });
+    }
+}
+"""
+        cpg = CPGBuilder().add_source(src, "Foo.java", "java").build()
+        var_names = _names(cpg, NodeKind.VARIABLE)
+        assert "upper" in var_names
+
+    def test_lambda_multi_param(self) -> None:
+        src = b"""
+class Foo {
+    void test() {
+        java.util.Comparator<String> cmp = (a, b) -> a.compareTo(b);
+    }
+}
+"""
+        cpg = CPGBuilder().add_source(src, "Foo.java", "java").build()
+        params = {n.name for n in cpg.nodes(kind=NodeKind.PARAMETER)}
+        assert "a" in params
+        assert "b" in params
+
+
+class TestTypeBasedCallResolution:
+    """#80 — Type-based call resolution and import-following."""
+
+    def test_class_bases_extracted(self) -> None:
+        src = b"""
+class Animal {}
+class Dog extends Animal {
+    void bark() {}
+}
+"""
+        cpg = CPGBuilder().add_source(src, "Dog.java", "java").build()
+        dog = next(n for n in cpg.nodes(kind=NodeKind.CLASS) if n.name == "Dog")
+        assert dog.attrs.get("bases") == ["Animal"]
+
+    def test_interface_implements_bases(self) -> None:
+        src = b"""
+interface Runnable {
+    void run();
+}
+class Worker implements Runnable {
+    public void run() {}
+}
+"""
+        cpg = CPGBuilder().add_source(src, "Worker.java", "java").build()
+        worker = next(n for n in cpg.nodes(kind=NodeKind.CLASS) if n.name == "Worker")
+        assert worker.attrs.get("bases") == ["Runnable"]
+
+    def test_mro_resolution(self) -> None:
+        """Method call on a typed variable resolves via class hierarchy."""
+        src = b"""
+class Base {
+    void greet() {}
+}
+class Child extends Base {
+}
+class App {
+    void test() {
+        Child c = new Child();
+        c.greet();
+    }
+}
+"""
+        cpg = CPGBuilder().add_source(src, "App.java", "java").build()
+        pairs = _edge_pairs(cpg, EdgeKind.CALLS)
+        # c.greet() should resolve to Base.greet via MRO
+        assert ("c.greet", "greet") in pairs, (
+            f"expected c.greet -> greet via MRO, got: {pairs}"
+        )
+
+    def test_receiver_inferred_type_set(self) -> None:
+        src = b"""
+class Foo {
+    void test() {
+        StringBuilder sb = new StringBuilder();
+        sb.append("hello");
+    }
+}
+"""
+        cpg = CPGBuilder().add_source(src, "Foo.java", "java").build()
+        call = next(
+            n for n in cpg.nodes(kind=NodeKind.CALL) if "append" in n.name
+        )
+        assert call.attrs.get("receiver_inferred_type") == "StringBuilder"
+
+    def test_variable_inferred_type_from_declaration(self) -> None:
+        src = b"""
+class Foo {
+    void test() {
+        String name = "hello";
+    }
+}
+"""
+        cpg = CPGBuilder().add_source(src, "Foo.java", "java").build()
+        var = next(n for n in cpg.nodes(kind=NodeKind.VARIABLE) if n.name == "name")
+        assert var.attrs.get("inferred_type") == "String"
