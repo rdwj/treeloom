@@ -1,0 +1,19 @@
+{
+  "reorg": {
+    "completed_at": "2026-04-09T00:00:00Z",
+    "completed_commit": "029074e2563fe9710f4fc9705340f20d803712c2",
+    "skill_version": "1.0",
+    "structure": {
+      "docs": "docs/",
+      "planning": null,
+      "research": "research/",
+      "demos": null
+    },
+    "artifacts": {
+      "docs_index": "docs/README.md",
+      "llms_txt": "llms.txt",
+      "llms_full_txt": "llms-full.txt"
+    }
+  },
+  "refreshes": []
+}
