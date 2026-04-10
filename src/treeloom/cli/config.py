@@ -119,6 +119,10 @@ def register(subparsers: argparse._SubParsersAction) -> None:  # type: ignore[ty
     p = subparsers.add_parser("config", help="View or modify configuration")
     p.add_argument("--show", action="store_true", default=False, help="Display effective config")
     p.add_argument("--init", action="store_true", help="Create .treeloom.yaml in cwd")
+    p.add_argument(
+        "--force", "-f", action="store_true", default=False,
+        help="Override project-root check when using --init",
+    )
     p.add_argument("--set", nargs=2, metavar=("KEY", "VALUE"), help="Set a config key")
     p.add_argument("--unset", metavar="KEY", help="Remove a config key")
     p.add_argument(
@@ -138,9 +142,16 @@ def run_config(args: argparse.Namespace, cfg: Config) -> int:
             "go.mod", "pom.xml", "package.json",
         )
         if not any((Path.cwd() / marker).exists() for marker in _project_markers):
+            if not args.force:
+                err(
+                    f"{Path.cwd()} does not appear to be a project root"
+                    " (no .git, pyproject.toml, etc.)."
+                    " Use --force to create the file anyway."
+                )
+                return 1
             err(
                 f"Warning: {Path.cwd()} does not appear to be a project root"
-                " (no .git, pyproject.toml, etc.)"
+                " (no .git, pyproject.toml, etc.) — proceeding anyway"
             )
         _write_yaml(dest, {f.name: getattr(cfg, f.name) for f in fields(Config)})
         err(f"Created {dest.resolve()}")
