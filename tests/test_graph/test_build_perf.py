@@ -175,10 +175,62 @@ class TestBuildProgressCallback:
         builder.build()
 
         phase_names = [phase for phase, _ in events]
-        assert "Parse" in phase_names
-        assert "CFG" in phase_names
-        assert "Call resolution" in phase_names
-        assert "Inter-procedural DFG" in phase_names
+        assert "Phase 1/5: Parsing" in phase_names
+        assert "Phase 2/5: Building control flow graph" in phase_names
+        assert "Phase 3/5: Resolving calls" in phase_names
+        assert "Phase 4/5: Computing function summaries" in phase_names
+        assert "Phase 5/5: Building inter-procedural data flow" in phase_names
+
+    def test_start_and_done_messages_for_each_phase(self):
+        """Each phase emits a start message (detail='') and a done message."""
+        events: list[tuple[str, str]] = []
+        builder = CPGBuilder(
+            registry=LanguageRegistry.default(),
+            progress=lambda phase, detail: events.append((phase, detail)),
+        )
+        builder.add_source(b"def f(): pass\n", "t.py", "python")
+        builder.build()
+
+        expected_phases = [
+            "Phase 1/5: Parsing",
+            "Phase 2/5: Building control flow graph",
+            "Phase 3/5: Resolving calls",
+            "Phase 4/5: Computing function summaries",
+            "Phase 5/5: Building inter-procedural data flow",
+        ]
+        for phase_name in expected_phases:
+            start_msgs = [(p, d) for p, d in events if p == phase_name and d == ""]
+            done_msgs = [(p, d) for p, d in events if p == phase_name and d.startswith("done")]
+            assert len(start_msgs) >= 1, (
+                f"Phase '{phase_name}' missing start message (detail='')"
+            )
+            assert len(done_msgs) >= 1, (
+                f"Phase '{phase_name}' missing done message"
+            )
+
+    def test_summary_computation_is_separate_phase(self):
+        """Function summaries should appear as Phase 4/5, separate from DFG."""
+        events: list[tuple[str, str]] = []
+        builder = CPGBuilder(
+            registry=LanguageRegistry.default(),
+            progress=lambda phase, detail: events.append((phase, detail)),
+        )
+        builder.add_source(b"def f(): pass\n", "t.py", "python")
+        builder.build()
+
+        summary_done = [
+            (p, d) for p, d in events
+            if p == "Phase 4/5: Computing function summaries" and d.startswith("done")
+        ]
+        assert len(summary_done) == 1
+        assert "summaries" in summary_done[0][1]
+
+        dfg_done = [
+            (p, d) for p, d in events
+            if p == "Phase 5/5: Building inter-procedural data flow" and d.startswith("done")
+        ]
+        assert len(dfg_done) == 1
+        assert "edges added" in dfg_done[0][1]
 
     def test_callback_detail_contains_timing(self):
         events: list[tuple[str, str]] = []
@@ -190,7 +242,8 @@ class TestBuildProgressCallback:
         builder.build()
 
         timing_pattern = re.compile(r"done \(\d+\.\d+s")
-        for phase, detail in events:
+        done_events = [(p, d) for p, d in events if d.startswith("done")]
+        for phase, detail in done_events:
             assert timing_pattern.search(detail), (
                 f"Phase '{phase}' detail lacks timing info: {detail!r}"
             )
@@ -215,7 +268,7 @@ class TestBuildTimeoutError:
         with pytest.raises(BuildTimeoutError) as exc_info:
             builder.build()
 
-        assert exc_info.value.phase == "Parse"
+        assert exc_info.value.phase == "Phase 1/5: Parsing"
         assert exc_info.value.timeout == 0
         assert exc_info.value.elapsed >= 0
 

@@ -11,6 +11,7 @@ from collections.abc import Callable
 from pathlib import Path, PurePosixPath
 from typing import Any
 
+from treeloom.analysis.summary import compute_summaries
 from treeloom.graph.cpg import CodePropertyGraph
 from treeloom.model.edges import CpgEdge, EdgeKind
 from treeloom.model.location import SourceLocation
@@ -136,17 +137,18 @@ class CPGBuilder:
     def build(self) -> CodePropertyGraph:
         """Execute the build pipeline and return the constructed CPG.
 
-        Pipeline stages:
-        1. Parse: select visitor by extension, parse source
-        2. Visit: visitor walks parse tree, emits nodes/edges via emitter
-        3. CFG: construct intra-procedural control flow edges
-        4. Call resolution: link call sites to definitions
-        5. Inter-procedural DFG: propagate data flow across calls (Phase 3)
+        Pipeline stages (5 phases):
+        1. Parse: select visitor by extension, parse source, emit AST nodes
+        2. CFG: construct intra-procedural control flow edges
+        3. Call resolution: link call sites to definitions
+        4. Function summaries: compute intra-procedural data flow summaries
+        5. Inter-procedural DFG: propagate data flow across call boundaries
         """
         self._build_start = time.monotonic()
         registry = self._get_registry()
 
-        # Parse phase
+        # Phase 1: Parse
+        self._report("Phase 1/5: Parsing", "")
         t0 = time.monotonic()
         queued_files = self._files
         self._files = []
@@ -159,22 +161,27 @@ class CPGBuilder:
             self._process_source(source_bytes, filename, language, registry)
         elapsed = time.monotonic() - t0
         self._report(
-            "Parse",
+            "Phase 1/5: Parsing",
             f"done ({elapsed:.1f}s, {len(self._cpg.files)} files, "
             f"{self._cpg.node_count} nodes)",
         )
-        self._check_timeout("Parse")
+        self._check_timeout("Phase 1/5: Parsing")
 
-        # CFG — connect statements within each function
+        # Phase 2: CFG — connect statements within each function
+        self._report("Phase 2/5: Building control flow graph", "")
         t0 = time.monotonic()
         self._build_cfg()
         func_count = sum(1 for _ in self._cpg.nodes(kind=NodeKind.FUNCTION))
         elapsed = time.monotonic() - t0
-        self._report("CFG", f"done ({elapsed:.1f}s, {func_count} functions)")
-        self._check_timeout("CFG")
+        self._report(
+            "Phase 2/5: Building control flow graph",
+            f"done ({elapsed:.1f}s, {func_count} functions)",
+        )
+        self._check_timeout("Phase 2/5: Building control flow graph")
 
-        # Call resolution: let each visitor link CALL nodes to FUNCTION defs
+        # Phase 3: Call resolution
         if registry is not None:
+            self._report("Phase 3/5: Resolving calls", "")
             t0 = time.monotonic()
             call_count_before = sum(
                 1 for _ in self._cpg.edges(kind=EdgeKind.CALLS)
@@ -189,16 +196,45 @@ class CPGBuilder:
             )
             elapsed = time.monotonic() - t0
             self._report(
-                "Call resolution",
+                "Phase 3/5: Resolving calls",
                 f"done ({elapsed:.1f}s, {calls_resolved}/{total_calls} calls resolved)",
             )
-            self._check_timeout("Call resolution")
+            self._check_timeout("Phase 3/5: Resolving calls")
+        else:
+            self._report("Phase 3/5: Resolving calls", "skipped (no language registry)")
 
-        # Inter-procedural DFG — propagate data flow across calls
+        # Phase 4: Function summaries
+        self._report("Phase 4/5: Computing function summaries", "")
         t0 = time.monotonic()
-        self._build_interprocedural_dfg()
+        summaries = compute_summaries(self._cpg)
         elapsed = time.monotonic() - t0
-        self._report("Inter-procedural DFG", f"done ({elapsed:.1f}s)")
+        self._report(
+            "Phase 4/5: Computing function summaries",
+            f"done ({elapsed:.1f}s, {len(summaries)} summaries)",
+        )
+        self._check_timeout("Phase 4/5: Computing function summaries")
+
+        # Phase 5: Inter-procedural DFG — propagate data flow across calls
+        self._report("Phase 5/5: Building inter-procedural data flow", "")
+        t0 = time.monotonic()
+        dfg_edges_before = sum(
+            1
+            for e in self._cpg.edges(kind=EdgeKind.DATA_FLOWS_TO)
+            if e.attrs.get("interprocedural")
+        )
+        self._build_interprocedural_dfg(summaries)
+        dfg_edges_after = sum(
+            1
+            for e in self._cpg.edges(kind=EdgeKind.DATA_FLOWS_TO)
+            if e.attrs.get("interprocedural")
+        )
+        edges_added = dfg_edges_after - dfg_edges_before
+        elapsed = time.monotonic() - t0
+        self._report(
+            "Phase 5/5: Building inter-procedural data flow",
+            f"done ({elapsed:.1f}s, {edges_added} edges added)",
+        )
+        self._check_timeout("Phase 5/5: Building inter-procedural data flow")
 
         # Clear tree-sitter node references now that build is complete
         for cpg_node in self._cpg._nodes.values():
@@ -572,7 +608,7 @@ class CPGBuilder:
                             kind=EdgeKind.FLOWS_TO,
                         ))
 
-    def _build_interprocedural_dfg(self) -> None:
+    def _build_interprocedural_dfg(self, summaries: dict[NodeId, Any]) -> None:
         """Create DATA_FLOWS_TO edges across call boundaries.
 
         For each CALLS edge (call_site -> function_def):
@@ -586,11 +622,10 @@ class CPGBuilder:
         Argument-to-parameter matching is position-based, using source
         location to order the argument nodes. This is a v1 simplification;
         keyword arguments and receiver objects (self) are not handled.
+
+        *summaries* is a pre-computed mapping of function NodeId to
+        FunctionSummary, produced by ``compute_summaries()`` in Phase 4.
         """
-        from treeloom.analysis.summary import compute_summaries
-
-        summaries = compute_summaries(self._cpg)
-
         for edge in list(self._cpg.edges(kind=EdgeKind.CALLS)):
             call_node = self._cpg.node(edge.source)
             func_node = self._cpg.node(edge.target)
@@ -751,11 +786,22 @@ class CPGBuilder:
             )
             self._check_timeout("Call resolution")
 
+        # Re-compute function summaries
+        t0 = time.monotonic()
+        summaries = compute_summaries(self._cpg)
+        elapsed = time.monotonic() - t0
+        self._report(
+            "Function summaries",
+            f"done ({elapsed:.1f}s, {len(summaries)} summaries)",
+        )
+        self._check_timeout("Function summaries")
+
         # Re-run inter-procedural DFG globally
         t0 = time.monotonic()
-        self._build_interprocedural_dfg()
+        self._build_interprocedural_dfg(summaries)
         elapsed = time.monotonic() - t0
         self._report("Inter-procedural DFG", f"done ({elapsed:.1f}s)")
+        self._check_timeout("Inter-procedural DFG")
 
         # Clear tree-sitter references on new nodes
         for cpg_node in self._cpg._nodes.values():
@@ -875,16 +921,17 @@ class CPGBuilder:
         resolves calls from its own language (preventing duplicates and
         applying language-specific disambiguation).
 
-        FUNCTION nodes are shared across all visitors — a call in any
-        language can resolve to a function defined in any file.  This
-        avoids lost resolution for cross-language references (e.g. C++
-        calling C via headers, TypeScript importing JavaScript modules).
+        FUNCTION nodes are collected in a single scan.  Each visitor
+        receives the full function list so cross-language resolution
+        still works (e.g. TypeScript importing JavaScript modules).
         """
-        # One shared function list for all visitors to search
+        # Single scan: collect all FUNCTION and CALL nodes once upfront.
+        # Each visitor receives the full function list so cross-language
+        # calls can resolve (e.g. TypeScript importing JavaScript modules).
         all_functions = list(self._cpg.nodes(kind=NodeKind.FUNCTION))
 
         # Partition CALL nodes by file extension — each call is resolved
-        # by exactly one visitor (the one that owns the call's language)
+        # by exactly one visitor (the one that owns the call's language).
         calls_by_ext: dict[str, list[CpgNode]] = {}
         for n in self._cpg.nodes(kind=NodeKind.CALL):
             if n.location is not None:

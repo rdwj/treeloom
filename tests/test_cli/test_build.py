@@ -156,11 +156,12 @@ class TestBuild:
         )
         run_build(args, default_cfg)
         captured = capsys.readouterr()
-        lines = [ln for ln in captured.err.splitlines() if "Parsing" in ln]
-        assert len(lines) > 0
-        # Each line should start with [i/N]
+        # Filter per-file progress lines (start with '['), not phase summary lines
         import re
         pattern = re.compile(r"^\[(\d+)/(\d+)\] Parsing")
+        lines = [ln for ln in captured.err.splitlines() if pattern.match(ln)]
+        assert len(lines) > 0
+        # Each line should start with [i/N]
         for line in lines:
             assert pattern.match(line), f"Unexpected format: {line!r}"
         # The total N should be consistent
@@ -217,8 +218,8 @@ class TestBuild:
         assert rc == 0
 
         err_text = capsys.readouterr().err
-        # Only the two .py files should appear in progress output
-        lines = [ln for ln in err_text.splitlines() if "Parsing" in ln]
+        # Only the two .py files should appear in per-file progress output
+        lines = [ln for ln in err_text.splitlines() if ln.startswith("[")]
         assert len(lines) == 2
         # Total reported should also be 2, not 4
         assert "[1/2]" in err_text

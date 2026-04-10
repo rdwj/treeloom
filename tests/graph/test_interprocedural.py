@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from treeloom.analysis.summary import compute_summaries
 from treeloom.graph.builder import CPGBuilder
 from treeloom.model.edges import CpgEdge, EdgeKind
 from treeloom.model.location import SourceLocation
@@ -51,7 +52,7 @@ class TestArgFlowsToParam:
         )
 
         # Run inter-procedural DFG
-        builder._build_interprocedural_dfg()
+        builder._build_interprocedural_dfg(compute_summaries(builder._cpg))
 
         # Verify: var_a should now flow to param_x
         dfg_edges = list(builder._cpg.edges(kind=EdgeKind.DATA_FLOWS_TO))
@@ -85,7 +86,7 @@ class TestArgFlowsToParam:
             CpgEdge(source=call_id, target=callee_id, kind=EdgeKind.CALLS)
         )
 
-        builder._build_interprocedural_dfg()
+        builder._build_interprocedural_dfg(compute_summaries(builder._cpg))
 
         dfg_edges = list(builder._cpg.edges(kind=EdgeKind.DATA_FLOWS_TO))
 
@@ -115,7 +116,7 @@ class TestArgFlowsToParam:
             CpgEdge(source=call_id, target=callee_id, kind=EdgeKind.CALLS)
         )
 
-        builder._build_interprocedural_dfg()
+        builder._build_interprocedural_dfg(compute_summaries(builder._cpg))
 
         dfg_edges = list(builder._cpg.edges(kind=EdgeKind.DATA_FLOWS_TO))
         # Only first arg wired
@@ -148,7 +149,7 @@ class TestReturnFlowsToCallSite:
             CpgEdge(source=call_id, target=func_id, kind=EdgeKind.CALLS)
         )
 
-        builder._build_interprocedural_dfg()
+        builder._build_interprocedural_dfg(compute_summaries(builder._cpg))
 
         # The return source (var_cleaned) should flow to the call node
         dfg_edges = list(builder._cpg.edges(kind=EdgeKind.DATA_FLOWS_TO))
@@ -176,7 +177,7 @@ class TestNoInterproceduralForUnresolved:
         # No CALLS edge — the call is unresolved.
         edge_count_before = builder._cpg.edge_count
 
-        builder._build_interprocedural_dfg()
+        builder._build_interprocedural_dfg(compute_summaries(builder._cpg))
 
         # No new edges should be created
         assert builder._cpg.edge_count == edge_count_before, (

@@ -74,7 +74,10 @@ def run_build(args: argparse.Namespace, cfg: Config) -> int:
     progress_cb: BuildProgressCallback | None = None
     if show_progress:
         def progress_cb(phase: str, detail: str) -> None:
-            print(f"  {phase}: {detail}", file=sys.stderr)
+            if not detail:
+                # Start message — skip empty detail lines
+                return
+            print(f"{phase}... {detail}", file=sys.stderr)
 
     builder = CPGBuilder(registry=registry, progress=progress_cb, timeout=timeout)
 
