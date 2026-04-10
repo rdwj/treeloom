@@ -9,7 +9,7 @@ A language-agnostic Code Property Graph (CPG) library for Python. treeloom parse
 - **Taint analysis** -- generic label-propagation engine for tracking data flow from sources to sinks, with sanitizer support and field-sensitive propagation
 - **Stdlib propagation models** -- YAML-based data flow models for Python stdlib (json, pickle, subprocess, os.path, etc.) loaded via `load_models()`
 - **Incremental rebuild** -- `CPGBuilder.rebuild()` re-parses only changed files, preserving unchanged nodes, edges, and annotations
-- **Type-aware call resolution** -- constructor tracking and MRO-based method dispatch for Python and Java
+- **Type-aware call resolution** -- constructor tracking, type annotation extraction (parameters, variables, return types), and MRO-based method dispatch for Python and Java
 - **Import-following resolution** -- calls to imported functions resolve across file boundaries when the source module is in the CPG (Python and Java)
 - **Pattern matching** -- chain-based pattern queries for finding code patterns across the graph
 - **Visualization** -- export to JSON, Graphviz DOT, or interactive HTML (Cytoscape.js)
@@ -17,7 +17,7 @@ A language-agnostic Code Property Graph (CPG) library for Python. treeloom parse
 - **Consumer annotations** -- attach arbitrary metadata to nodes without modifying the structural graph
 - **Overlay system** -- inject visual styling for domain-specific visualization (e.g., security analysis results)
 - **Serialization** -- full round-trip JSON serialization including annotations
-- **Portable graphs** -- `CPGBuilder(relative_root=...)` stores relative file paths, making serialized graphs portable across machines
+- **Portable graphs** -- `CPGBuilder(relative_root=...)` stores relative file paths, making serialized graphs portable across machines. The CLI auto-derives a relative root from the build target by default
 
 ## Quick Start
 
@@ -217,6 +217,14 @@ mypy src/treeloom/
 ```
 
 ## Changelog
+
+### Version 0.8.0
+
+- Python type annotation extraction: parameter annotations (`def foo(x: Dog):`), variable annotations (`x: Dog = ...`), and function return type annotations (`def foo() -> Dog:`) now populate the type map used for method call resolution. Explicit annotations take priority over constructor inference. Generic types are stripped (`list[str]` → `list`).
+- Portable CPGs by default: `treeloom build` now auto-derives `--relative-root` from the build target directory, so serialized CPGs use relative paths without requiring an explicit flag. An explicit `--relative-root DIR` flag is available for custom roots.
+- Edge query location fallback: `treeloom edges` now parses node ID strings to recover file:line information when a node lacks a `SourceLocation`, reducing `?:?` display to only truly synthetic nodes.
+- `config --init` safety: aborts with an error when the current directory doesn't appear to be a project root (no `.git`, `pyproject.toml`, etc.) unless `--force` is given.
+- 1281 tests
 
 ### Version 0.7.0
 
