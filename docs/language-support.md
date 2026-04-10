@@ -43,9 +43,9 @@ treeloom ships with built-in visitors for eight languages. Grammar packages are 
 | for loop        | yes    | yes        | yes        | yes | yes | yes | yes | yes |
 | while loop      | yes    | yes        | yes        | yes | yes | yes | yes | yes |
 | switch/match    | yes (match) | yes   | yes        | yes | yes | yes | yes | yes (match) |
-| try/catch       | BRANCH | BRANCH     | BRANCH     | no  | BRANCH | no | BRANCH | no |
+| try/catch       | BRANCH | BRANCH     | BRANCH     | no  | yes    | no | BRANCH | no |
 
-`try/catch` constructs are emitted as BRANCH nodes in languages where they are supported. Languages without checked exceptions (Go, C, Rust) don't model them.
+`try/catch` constructs are emitted as BRANCH nodes in some languages. Java visits try/catch/finally bodies and emits caught exception variables but does not create BRANCH nodes. Languages without checked exceptions (Go, C, Rust) don't model them.
 
 ### Data Flow
 
@@ -64,8 +64,8 @@ treeloom ships with built-in visitors for eight languages. Grammar packages are 
 |------------------------|:------:|:----------:|:----------:|:--:|:----:|:-:|:---:|:----:|
 | Name-based             | yes    | yes        | yes        | yes | yes | yes | yes | yes |
 | Qualifier stripping    | yes    | yes        | yes        | yes | yes | no | no | no |
-| Type-based / MRO       | yes    | no         | no         | no | no | no | no | no |
-| Import-following       | yes    | no         | no         | no | no | no | no | no |
+| Type-based / MRO       | yes    | no         | no         | no | yes | no | no | no |
+| Import-following       | yes    | no         | no         | no | yes | no | no | no |
 | Interface dispatch     | no     | no         | no         | no | no | no | no | no |
 
 ### Source Text Spans
@@ -73,10 +73,10 @@ treeloom ships with built-in visitors for eight languages. Grammar packages are 
 | Feature         | Python | JavaScript | TypeScript | Go | Java | C | C++ | Rust |
 |----------------|:------:|:----------:|:----------:|:--:|:----:|:-:|:---:|:----:|
 | start_location  | yes    | yes        | yes        | yes | yes | yes | yes | yes |
-| end_location    | yes    | no         | no         | no | no | no | no | no |
-| source_text     | yes    | no         | no         | no | no | no | no | no |
+| end_location    | yes    | no         | no         | no | yes | no | no | no |
+| source_text     | yes    | no         | no         | no | yes | no | no | no |
 
-`end_location` and `source_text` are stored in `CpgNode.attrs` when populated. Other languages will gain these fields in future releases.
+`end_location` and `source_text` are stored in `CpgNode.attrs` when populated. Additional languages will gain these fields in future releases.
 
 ---
 
@@ -84,7 +84,7 @@ treeloom ships with built-in visitors for eight languages. Grammar packages are 
 
 ### Python
 
-The reference implementation and the most complete visitor. Python is the only language with type-based MRO resolution and import-following call resolution, where a `from module import func` import causes treeloom to search the original module scope when resolving calls to `func`. Async functions (`async def`) are handled as FUNCTION nodes with `is_async=True` in `attrs`. Match statements (`match`/`case`, Python 3.10+) are modeled as BRANCH nodes.
+The reference implementation. Python and Java share the most complete feature set, including type-based MRO resolution and import-following call resolution, where a `from module import func` import causes treeloom to search the original module scope when resolving calls to `func`. Async functions (`async def`) are handled as FUNCTION nodes with `is_async=True` in `attrs`. Match statements (`match`/`case`, Python 3.10+) are modeled as BRANCH nodes.
 
 ### JavaScript
 
@@ -100,7 +100,7 @@ Go has no classes; structs and interfaces are emitted as CLASS nodes. Methods ar
 
 ### Java
 
-Class hierarchies (`extends`, `implements`) are captured on CLASS nodes via `attrs["extends"]` and `attrs["implements"]`. Annotations (`@Override`, `@SuppressWarnings`, etc.) are captured in `attrs["decorators"]` on FUNCTION and CLASS nodes. Static initializer blocks are emitted as FUNCTION nodes named `<clinit>`. Anonymous classes and lambda expressions are emitted as FUNCTION nodes with synthetic names.
+At feature parity with the Python visitor. Class hierarchies (`extends`, `implements`) are captured on CLASS nodes via `attrs["bases"]`. Lambda expressions are emitted as FUNCTION nodes with synthetic names (e.g., `lambda$4$8`) and their parameters as PARAMETER nodes. Record declarations are emitted as CLASS nodes with record components as PARAMETER nodes. Switch statements (including arrow-syntax rules), try/catch/finally, try-with-resources, do-while loops, throw statements, static initializer blocks, and synchronized blocks are all handled. Field declarations emit VARIABLE nodes visible to method bodies. Varargs parameters (`Object... args`) are emitted as PARAMETER nodes with type annotation `Object...`. The visitor tracks `inferred_type` on variables from declared types and constructor calls, and passes `receiver_inferred_type` on method calls for type-based MRO resolution and import-following — matching the Python visitor's call resolution capabilities.
 
 ### C
 
@@ -120,9 +120,9 @@ Struct, enum, and trait definitions are emitted as CLASS nodes. Trait implementa
 
 **Call resolution is best-effort for all languages.** treeloom does not implement a type inference engine. For any language, if a call cannot be resolved to a definition by name or import tracing, the CALL node remains in the graph without a CALLS edge. This is by design — unresolved calls are visible orphans, not silent gaps.
 
-**Only Python has MRO-based and import-following resolution.** For all other languages, call resolution is name-based with qualifier stripping. This means method calls on typed objects (`obj.method()`) that cannot be resolved by name alone will remain unresolved.
+**Only Python and Java have MRO-based and import-following resolution.** For all other languages, call resolution is name-based with qualifier stripping. This means method calls on typed objects (`obj.method()`) that cannot be resolved by name alone will remain unresolved.
 
-**Only Python populates `end_location` and `source_text`.** These fields in `CpgNode.attrs` are blank for all other languages. Code that reads these fields should guard with `attrs.get("source_text")` rather than assuming presence.
+**Only Python and Java populate `end_location` and `source_text`.** These fields in `CpgNode.attrs` are blank for all other languages. Code that reads these fields should guard with `attrs.get("source_text")` rather than assuming presence.
 
 **Cross-language call resolution works via shared function nodes.** When a TypeScript file calls a function defined in a JavaScript file, the TypeScript visitor's `resolve_calls` sees all FUNCTION nodes regardless of source language — because `CPGBuilder` passes the full function list to each visitor's `resolve_calls`. This means TS→JS resolution works if the function name is unambiguous.
 
