@@ -82,4 +82,4 @@ All operations are available from the `treeloom` command:
 ## Optional
 
 - [pyproject.toml](pyproject.toml): Package metadata, dependencies, extras
-- [RESEARCH.md](RESEARCH.md): CPG tooling landscape and rationale for building treeloom
+- [CPG Landscape Research](research/cpg-landscape.md): CPG tooling landscape and rationale for building treeloom

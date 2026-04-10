@@ -5,7 +5,7 @@ Tested against: vulpy (vulnerable Python Flask app) at
 
 Test date: 2026-03-25
 treeloom version: current `main` branch
-Previous test: TESTING-NOTES.md (commit 78304a9, v0.2.1-era)
+Previous test: testing-notes-v0.2.1.md (commit 78304a9, v0.2.1-era)
 
 ---
 
