@@ -558,12 +558,18 @@ class TestSourceText:
         return _build("SimpleClass.java")
 
     def test_class_has_source_text(self, cpg_with_source: CodePropertyGraph) -> None:
-        cls = next(n for n in cpg_with_source.nodes(kind=NodeKind.CLASS) if n.name == "SimpleClass")
+        cls = next(
+            n for n in cpg_with_source.nodes(kind=NodeKind.CLASS)
+            if n.name == "SimpleClass"
+        )
         assert "source_text" in cls.attrs
         assert "class SimpleClass" in cls.attrs["source_text"]
 
     def test_function_has_source_text(self, cpg_with_source: CodePropertyGraph) -> None:
-        func = next(n for n in cpg_with_source.nodes(kind=NodeKind.FUNCTION) if n.name == "getValue")
+        func = next(
+            n for n in cpg_with_source.nodes(kind=NodeKind.FUNCTION)
+            if n.name == "getValue"
+        )
         assert "source_text" in func.attrs
 
     def test_module_no_source_text(self, cpg_with_source: CodePropertyGraph) -> None:

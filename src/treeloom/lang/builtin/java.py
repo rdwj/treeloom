@@ -22,6 +22,10 @@ if TYPE_CHECKING:
 logger = logging.getLogger(__name__)
 
 # tree-sitter node types that map to treeloom LITERAL with a type label
+# tree-sitter node types that represent class/interface type references
+_CLASS_TYPE_NODES = ("type_identifier", "generic_type", "scoped_type_identifier")
+
+# tree-sitter node types that map to treeloom LITERAL with a type label
 _LITERAL_TYPES: dict[str, str] = {
     "decimal_integer_literal": "int",
     "hex_integer_literal": "int",
@@ -197,17 +201,17 @@ class JavaVisitor(TreeSitterVisitor):
         for child in node.children:
             if child.type in ("superclass", "super_interfaces"):
                 for sub in child.children:
-                    if sub.type in ("type_identifier", "generic_type", "scoped_type_identifier"):
+                    if sub.type in _CLASS_TYPE_NODES:
                         bases.append(self._node_text(sub, ctx.source))
                     elif sub.type == "type_list":
                         for t in sub.children:
-                            if t.type in ("type_identifier", "generic_type", "scoped_type_identifier"):
+                            if t.type in _CLASS_TYPE_NODES:
                                 bases.append(self._node_text(t, ctx.source))
             elif child.type == "extends_interfaces":
                 for sub in child.children:
                     if sub.type == "type_list":
                         for t in sub.children:
-                            if t.type in ("type_identifier", "generic_type", "scoped_type_identifier"):
+                            if t.type in _CLASS_TYPE_NODES:
                                 bases.append(self._node_text(t, ctx.source))
         class_id = ctx.emitter.emit_class(
             self._node_text(name_node, ctx.source),

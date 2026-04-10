@@ -9,11 +9,11 @@ A language-agnostic Code Property Graph (CPG) library for Python. treeloom parse
 - **Taint analysis** -- generic label-propagation engine for tracking data flow from sources to sinks, with sanitizer support and field-sensitive propagation
 - **Stdlib propagation models** -- YAML-based data flow models for Python stdlib (json, pickle, subprocess, os.path, etc.) loaded via `load_models()`
 - **Incremental rebuild** -- `CPGBuilder.rebuild()` re-parses only changed files, preserving unchanged nodes, edges, and annotations
-- **Type-aware call resolution** -- constructor tracking and MRO-based method dispatch for Python
-- **Import-following resolution** -- calls to imported functions resolve across file boundaries when the source module is in the CPG
+- **Type-aware call resolution** -- constructor tracking and MRO-based method dispatch for Python and Java
+- **Import-following resolution** -- calls to imported functions resolve across file boundaries when the source module is in the CPG (Python and Java)
 - **Pattern matching** -- chain-based pattern queries for finding code patterns across the graph
 - **Visualization** -- export to JSON, Graphviz DOT, or interactive HTML (Cytoscape.js)
-- **Source text spans** -- `end_location` on every node (Python visitor), optional `source_text` via `--include-source` for class/function nodes
+- **Source text spans** -- `end_location` on every node (Python and Java visitors), optional `source_text` via `--include-source` for class/function nodes
 - **Consumer annotations** -- attach arbitrary metadata to nodes without modifying the structural graph
 - **Overlay system** -- inject visual styling for domain-specific visualization (e.g., security analysis results)
 - **Serialization** -- full round-trip JSON serialization including annotations
@@ -217,6 +217,15 @@ mypy src/treeloom/
 ```
 
 ## Changelog
+
+### Version 0.7.0
+
+- Java visitor feature parity with Python: switch/case, try/catch/finally, try-with-resources, do-while, throw, static initializers, synchronized blocks, record declarations, field declarations, varargs parameters, lambda FUNCTION nodes with parameters, ternary expressions with both-branch DFG, method references, field access tracking, update/unary/instanceof expressions, for-loop condition/update visiting.
+- Type-based call resolution for Java: class hierarchy extraction (`extends`/`implements` as `bases`), `receiver_inferred_type` on method calls, MRO traversal, and import-following — matching Python's resolution capabilities.
+- Source text spans for Java: `end_location` and `source_text` on all Java node kinds, matching Python.
+- Python async detection fix: `async def` functions now correctly set `is_async=True` (was always `False` due to tree-sitter grammar change).
+- 100% test coverage for Java and Python visitors (up from 91% and 84%).
+- 1258 tests
 
 ### Version 0.6.0
 
