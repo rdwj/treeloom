@@ -65,7 +65,8 @@ treeloom/
 │   └── test_export/
 ├── pyproject.toml
 ├── CLAUDE.md
-└── RESEARCH.md
+└── research/
+    └── cpg-landscape.md
 ```
 
 
