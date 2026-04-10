@@ -52,6 +52,7 @@ class CpgNode:
     kind: NodeKind
     name: str
     location: SourceLocation | None
+    end_location: SourceLocation | None = None
     scope: NodeId | None = None
     attrs: dict[str, Any] = field(default_factory=dict)
     _tree_node: Any = field(default=None, repr=False, compare=False)

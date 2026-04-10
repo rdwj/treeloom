@@ -40,6 +40,10 @@ def register(subparsers: argparse._SubParsersAction) -> None:  # type: ignore[ty
         "--timeout", type=float, default=None, metavar="SECONDS",
         help="Abort build if it exceeds this many seconds",
     )
+    p.add_argument(
+        "--include-source", action="store_true",
+        help="Include source text in CPG nodes (increases output size)",
+    )
     p.set_defaults(func=run_build)
 
 
@@ -54,6 +58,7 @@ def run_build(args: argparse.Namespace, cfg: Config) -> int:
     show_progress: bool = getattr(args, "progress", False)
     languages: list[str] | None = getattr(args, "languages", None)
     timeout: float | None = getattr(args, "timeout", None)
+    include_source: bool = getattr(args, "include_source", False)
 
     registry = LanguageRegistry.default()
 
@@ -79,7 +84,10 @@ def run_build(args: argparse.Namespace, cfg: Config) -> int:
                 return
             print(f"{phase}... {detail}", file=sys.stderr)
 
-    builder = CPGBuilder(registry=registry, progress=progress_cb, timeout=timeout)
+    builder = CPGBuilder(
+        registry=registry, progress=progress_cb, timeout=timeout,
+        include_source=include_source,
+    )
 
     if path.is_file():
         if show_progress:

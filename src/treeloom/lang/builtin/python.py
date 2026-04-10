@@ -52,7 +52,11 @@ class PythonVisitor(TreeSitterVisitor):
         root = tree.root_node
         source = root.text
 
-        module_id = emitter.emit_module(file_path.stem, file_path)
+        module_end = self._end_location(root, file_path)
+        module_id = emitter.emit_module(
+            file_path.stem, file_path,
+            end_location=module_end,
+        )
         ctx = _VisitContext(emitter=emitter, file_path=file_path, source=source)
         ctx.scope_stack.append(module_id)
 
@@ -251,6 +255,8 @@ class PythonVisitor(TreeSitterVisitor):
 
         class_id = ctx.emitter.emit_class(
             class_name, loc, scope, bases=bases or None,
+            end_location=self._end_location(node, ctx.file_path),
+            source_text=self._node_text(node, ctx.source),
         )
         ctx.scope_stack.append(class_id)
         ctx.class_stack.append(class_name)
@@ -328,6 +334,8 @@ class PythonVisitor(TreeSitterVisitor):
         func_id = ctx.emitter.emit_function(
             func_name, loc, scope, params=None, is_async=is_async,
             decorators=decorators,
+            end_location=self._end_location(node, ctx.file_path),
+            source_text=self._node_text(node, ctx.source),
         )
 
         # Now visit the body within the function scope
@@ -344,7 +352,8 @@ class PythonVisitor(TreeSitterVisitor):
                 if param_name is not None:
                     param_loc = self._location(child, ctx.file_path)
                     param_id = ctx.emitter.emit_parameter(
-                        param_name, param_loc, func_id, position=position
+                        param_name, param_loc, func_id, position=position,
+                        end_location=self._end_location(child, ctx.file_path),
                     )
                     ctx.defined_vars[param_name] = param_id
                     position += 1
@@ -391,6 +400,7 @@ class PythonVisitor(TreeSitterVisitor):
 
         var_id = ctx.emitter.emit_variable(
             var_name, loc, scope, inferred_type=inferred_type,
+            end_location=self._end_location(left, ctx.file_path),
         )
 
         # Track this variable definition for later USED_BY resolution
@@ -418,7 +428,10 @@ class PythonVisitor(TreeSitterVisitor):
     ) -> None:
         loc = self._location(node, ctx.file_path)
         scope = ctx.current_scope
-        ret_id = ctx.emitter.emit_return(loc, scope)
+        ret_id = ctx.emitter.emit_return(
+            loc, scope,
+            end_location=self._end_location(node, ctx.file_path),
+        )
 
         # If there's a return value, emit DATA_FLOWS_TO from the expression
         # to the return node, and USED_BY for variable references
@@ -455,6 +468,7 @@ class PythonVisitor(TreeSitterVisitor):
         ctx.emitter.emit_import(
             module_name, names, loc, scope, is_from=False,
             aliases=aliases or None,
+            end_location=self._end_location(node, ctx.file_path),
         )
 
     def _visit_import_from_statement(
@@ -492,6 +506,7 @@ class PythonVisitor(TreeSitterVisitor):
         ctx.emitter.emit_import(
             module_name, imported_names, loc, scope, is_from=True,
             aliases=aliases or None,
+            end_location=self._end_location(node, ctx.file_path),
         )
 
     def _visit_if_statement(
@@ -504,7 +519,8 @@ class PythonVisitor(TreeSitterVisitor):
         has_else = any(child.type == "else_clause" for child in node.children)
 
         branch_id = ctx.emitter.emit_branch_node(
-            "if", loc, scope, has_else=has_else
+            "if", loc, scope, has_else=has_else,
+            end_location=self._end_location(node, ctx.file_path),
         )
 
         # Visit the condition for any calls/refs
@@ -540,7 +556,10 @@ class PythonVisitor(TreeSitterVisitor):
     ) -> None:
         loc = self._location(node, ctx.file_path)
         scope = parent_branch if parent_branch is not None else ctx.current_scope
-        elif_id = ctx.emitter.emit_branch_node("elif", loc, scope)
+        elif_id = ctx.emitter.emit_branch_node(
+            "elif", loc, scope,
+            end_location=self._end_location(node, ctx.file_path),
+        )
 
         condition = node.child_by_field_name("condition")
         if condition is not None:
@@ -566,13 +585,17 @@ class PythonVisitor(TreeSitterVisitor):
             iterator_var = self._node_text(left, ctx.source)
 
         loop_id = ctx.emitter.emit_loop_node(
-            "for", loc, scope, iterator_var=iterator_var
+            "for", loc, scope, iterator_var=iterator_var,
+            end_location=self._end_location(node, ctx.file_path),
         )
 
         # Emit the iterator variable
         if left is not None and left.type == "identifier" and iterator_var is not None:
             var_loc = self._location(left, ctx.file_path)
-            var_id = ctx.emitter.emit_variable(iterator_var, var_loc, loop_id)
+            var_id = ctx.emitter.emit_variable(
+                iterator_var, var_loc, loop_id,
+                end_location=self._end_location(left, ctx.file_path),
+            )
             ctx.defined_vars[iterator_var] = var_id
 
         # The iterable expression
@@ -593,7 +616,10 @@ class PythonVisitor(TreeSitterVisitor):
     ) -> None:
         loc = self._location(node, ctx.file_path)
         scope = ctx.current_scope
-        loop_id = ctx.emitter.emit_loop_node("while", loc, scope)
+        loop_id = ctx.emitter.emit_loop_node(
+            "while", loc, scope,
+            end_location=self._end_location(node, ctx.file_path),
+        )
 
         condition = node.child_by_field_name("condition")
         if condition is not None:
@@ -632,13 +658,17 @@ class PythonVisitor(TreeSitterVisitor):
                 interp_ids = self._collect_interpolation_ids(node, ctx)
                 if interp_ids:
                     fstr_id = ctx.emitter.emit_call(
-                        "f-string", loc, ctx.current_scope, args=None
+                        "f-string", loc, ctx.current_scope, args=None,
+                        end_location=self._end_location(node, ctx.file_path),
                     )
                     for iid in interp_ids:
                         ctx.emitter.emit_data_flow(iid, fstr_id)
                     return fstr_id
 
-            return ctx.emitter.emit_literal(value, lit_type, loc, ctx.current_scope)
+            return ctx.emitter.emit_literal(
+                value, lit_type, loc, ctx.current_scope,
+                end_location=self._end_location(node, ctx.file_path),
+            )
 
         if node.type == "identifier":
             # This is a variable reference. Look up its definition for USED_BY.
@@ -663,7 +693,10 @@ class PythonVisitor(TreeSitterVisitor):
             if existing_id is not None:
                 return existing_id
 
-            attr_id = ctx.emitter.emit_variable(attr_text, loc, ctx.current_scope)
+            attr_id = ctx.emitter.emit_variable(
+                attr_text, loc, ctx.current_scope,
+                end_location=self._end_location(node, ctx.file_path),
+            )
             ctx.defined_vars[attr_text] = attr_id
 
             # Wire data from the receiver object.  Handle three receiver types:
@@ -700,7 +733,10 @@ class PythonVisitor(TreeSitterVisitor):
             # taint can propagate: object -> subscript_var -> downstream uses.
             sub_text = self._node_text(node, ctx.source)
             loc = self._location(node, ctx.file_path)
-            sub_id = ctx.emitter.emit_variable(sub_text, loc, ctx.current_scope)
+            sub_id = ctx.emitter.emit_variable(
+                sub_text, loc, ctx.current_scope,
+                end_location=self._end_location(node, ctx.file_path),
+            )
             # Wire data from the object being subscripted, if it is a
             # resolvable identifier.
             val_node = node.child_by_field_name("value")
@@ -742,7 +778,8 @@ class PythonVisitor(TreeSitterVisitor):
                 # taint can flow from the RHS operand(s) through the result.
                 loc = self._location(node, ctx.file_path)
                 fmt_id = ctx.emitter.emit_call(
-                    "%", loc, ctx.current_scope, args=None
+                    "%", loc, ctx.current_scope, args=None,
+                    end_location=self._end_location(node, ctx.file_path),
                 )
                 if left_id is not None:
                     ctx.emitter.emit_data_flow(left_id, fmt_id)
@@ -946,6 +983,7 @@ class PythonVisitor(TreeSitterVisitor):
         call_id = ctx.emitter.emit_call(
             target_name, loc, scope, args=arg_texts,
             receiver_inferred_type=receiver_type,
+            end_location=self._end_location(node, ctx.file_path),
         )
 
         # Wire data flow from the chained receiver call (if any) to this call

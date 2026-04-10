@@ -58,6 +58,7 @@ class CPGBuilder:
         progress: BuildProgressCallback | None = None,
         timeout: float | None = None,
         relative_root: Path | None = None,
+        include_source: bool = False,
     ) -> None:
         self._registry = registry
         self._cpg = CodePropertyGraph()
@@ -71,6 +72,7 @@ class CPGBuilder:
         self._relative_root: Path | None = (
             relative_root.resolve() if relative_root is not None else None
         )
+        self._include_source = include_source
 
     @staticmethod
     def _file_hash(path: Path) -> str:
@@ -257,14 +259,25 @@ class CPGBuilder:
 
     # -- NodeEmitter implementation -------------------------------------------
 
-    def emit_module(self, name: str, path: Path) -> NodeId:
+    def emit_module(
+        self,
+        name: str,
+        path: Path,
+        end_location: SourceLocation | None = None,
+        source_text: str | None = None,
+    ) -> NodeId:
         """Emit a MODULE node."""
         loc = SourceLocation(file=path, line=1, column=0)
-        return self._emit_node(NodeKind.MODULE, name, loc, scope=None)
+        return self._emit_node(
+            NodeKind.MODULE, name, loc, scope=None,
+            end_location=end_location, source_text=source_text,
+        )
 
     def emit_class(
         self, name: str, location: SourceLocation, scope: NodeId,
         bases: list[str] | None = None,
+        end_location: SourceLocation | None = None,
+        source_text: str | None = None,
     ) -> NodeId:
         """Emit a CLASS node contained in the given scope."""
         attrs: dict[str, Any] = {}
@@ -272,6 +285,7 @@ class CPGBuilder:
             attrs["bases"] = bases
         node_id = self._emit_node(
             NodeKind.CLASS, name, location, scope=scope, attrs=attrs,
+            end_location=end_location, source_text=source_text,
         )
         self._emit_contains(scope, node_id)
         return node_id
@@ -284,6 +298,8 @@ class CPGBuilder:
         params: list[str] | None = None,
         is_async: bool = False,
         decorators: list[str] | None = None,
+        end_location: SourceLocation | None = None,
+        source_text: str | None = None,
     ) -> NodeId:
         """Emit a FUNCTION node contained in the given scope."""
         attrs: dict[str, Any] = {"is_async": is_async}
@@ -295,6 +311,8 @@ class CPGBuilder:
             location,
             scope=scope,
             attrs=attrs,
+            end_location=end_location,
+            source_text=source_text,
         )
         self._emit_contains(scope, node_id)
 
@@ -316,6 +334,8 @@ class CPGBuilder:
         function: NodeId,
         type_annotation: str | None = None,
         position: int = 0,
+        end_location: SourceLocation | None = None,
+        source_text: str | None = None,
     ) -> NodeId:
         """Emit a PARAMETER node with HAS_PARAMETER edge from its function."""
         node_id = self._emit_node(
@@ -324,6 +344,8 @@ class CPGBuilder:
             location,
             scope=function,
             attrs={"type_annotation": type_annotation, "position": position},
+            end_location=end_location,
+            source_text=source_text,
         )
         self._cpg.add_edge(CpgEdge(
             source=function,
@@ -335,6 +357,8 @@ class CPGBuilder:
     def emit_variable(
         self, name: str, location: SourceLocation, scope: NodeId,
         inferred_type: str | None = None,
+        end_location: SourceLocation | None = None,
+        source_text: str | None = None,
     ) -> NodeId:
         """Emit a VARIABLE node contained in the given scope."""
         attrs: dict[str, Any] = {}
@@ -342,6 +366,7 @@ class CPGBuilder:
             attrs["inferred_type"] = inferred_type
         node_id = self._emit_node(
             NodeKind.VARIABLE, name, location, scope=scope, attrs=attrs,
+            end_location=end_location, source_text=source_text,
         )
         self._emit_contains(scope, node_id)
         return node_id
@@ -353,6 +378,8 @@ class CPGBuilder:
         scope: NodeId,
         args: list[str] | None = None,
         receiver_inferred_type: str | None = None,
+        end_location: SourceLocation | None = None,
+        source_text: str | None = None,
     ) -> NodeId:
         """Emit a CALL node contained in the given scope."""
         attrs: dict[str, Any] = {"args_count": len(args) if args else 0}
@@ -360,6 +387,7 @@ class CPGBuilder:
             attrs["receiver_inferred_type"] = receiver_inferred_type
         node_id = self._emit_node(
             NodeKind.CALL, target_name, location, scope=scope, attrs=attrs,
+            end_location=end_location, source_text=source_text,
         )
         self._emit_contains(scope, node_id)
         return node_id
@@ -370,6 +398,8 @@ class CPGBuilder:
         literal_type: str,
         location: SourceLocation,
         scope: NodeId,
+        end_location: SourceLocation | None = None,
+        source_text: str | None = None,
     ) -> NodeId:
         """Emit a LITERAL node contained in the given scope."""
         node_id = self._emit_node(
@@ -378,13 +408,23 @@ class CPGBuilder:
             location,
             scope=scope,
             attrs={"literal_type": literal_type, "raw_value": value},
+            end_location=end_location, source_text=source_text,
         )
         self._emit_contains(scope, node_id)
         return node_id
 
-    def emit_return(self, location: SourceLocation, scope: NodeId) -> NodeId:
+    def emit_return(
+        self,
+        location: SourceLocation,
+        scope: NodeId,
+        end_location: SourceLocation | None = None,
+        source_text: str | None = None,
+    ) -> NodeId:
         """Emit a RETURN node contained in the given scope."""
-        node_id = self._emit_node(NodeKind.RETURN, "return", location, scope=scope)
+        node_id = self._emit_node(
+            NodeKind.RETURN, "return", location, scope=scope,
+            end_location=end_location, source_text=source_text,
+        )
         self._emit_contains(scope, node_id)
         return node_id
 
@@ -396,6 +436,8 @@ class CPGBuilder:
         scope: NodeId,
         is_from: bool = False,
         aliases: dict[str, str] | None = None,
+        end_location: SourceLocation | None = None,
+        source_text: str | None = None,
     ) -> NodeId:
         """Emit an IMPORT node contained in the given scope.
 
@@ -412,6 +454,8 @@ class CPGBuilder:
             location,
             scope=scope,
             attrs=attrs,
+            end_location=end_location,
+            source_text=source_text,
         )
         self._emit_contains(scope, node_id)
         return node_id
@@ -422,6 +466,8 @@ class CPGBuilder:
         location: SourceLocation,
         scope: NodeId,
         has_else: bool = False,
+        end_location: SourceLocation | None = None,
+        source_text: str | None = None,
     ) -> NodeId:
         """Emit a BRANCH node contained in the given scope."""
         node_id = self._emit_node(
@@ -430,6 +476,7 @@ class CPGBuilder:
             location,
             scope=scope,
             attrs={"branch_type": branch_type, "has_else": has_else},
+            end_location=end_location, source_text=source_text,
         )
         self._emit_contains(scope, node_id)
         return node_id
@@ -440,6 +487,8 @@ class CPGBuilder:
         location: SourceLocation,
         scope: NodeId,
         iterator_var: str | None = None,
+        end_location: SourceLocation | None = None,
+        source_text: str | None = None,
     ) -> NodeId:
         """Emit a LOOP node contained in the given scope."""
         node_id = self._emit_node(
@@ -448,6 +497,7 @@ class CPGBuilder:
             location,
             scope=scope,
             attrs={"loop_type": loop_type, "iterator_var": iterator_var},
+            end_location=end_location, source_text=source_text,
         )
         self._emit_contains(scope, node_id)
         return node_id
@@ -516,16 +566,22 @@ class CPGBuilder:
         location: SourceLocation | None,
         scope: NodeId | None = None,
         attrs: dict[str, Any] | None = None,
+        end_location: SourceLocation | None = None,
+        source_text: str | None = None,
     ) -> NodeId:
         """Create a CpgNode, add it to the CPG, and return its ID."""
         node_id = self._next_id(kind, location)
+        final_attrs = dict(attrs) if attrs else {}
+        if source_text is not None and self._include_source:
+            final_attrs["source_text"] = source_text
         cpg_node = CpgNode(
             id=node_id,
             kind=kind,
             name=name,
             location=location,
+            end_location=end_location,
             scope=scope,
-            attrs=attrs or {},
+            attrs=final_attrs,
         )
         self._cpg.add_node(cpg_node)
         return node_id

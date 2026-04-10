@@ -272,3 +272,75 @@ class TestBuild:
         )
         rc = run_build(args, default_cfg)
         assert rc == 1
+
+    def test_include_source_populates_source_text(
+        self,
+        fixture_dir: Path,
+        tmp_path: Path,
+        default_cfg: Config,
+    ) -> None:
+        """--include-source should add source_text attrs to indexable nodes."""
+        out = tmp_path / "out.json"
+        args = argparse.Namespace(
+            path=fixture_dir / "simple_function.py",
+            output=out,
+            exclude=None,
+            quiet=True,
+            include_source=True,
+        )
+        rc = run_build(args, default_cfg)
+        assert rc == 0
+        data = json.loads(out.read_text())
+        func_nodes = [
+            n for n in data["nodes"] if n["kind"] == "function"
+        ]
+        assert len(func_nodes) > 0
+        for fn in func_nodes:
+            assert "source_text" in fn["attrs"], (
+                f"Function {fn['name']!r} should have source_text with --include-source"
+            )
+
+    def test_without_include_source_no_source_text(
+        self,
+        fixture_dir: Path,
+        tmp_path: Path,
+        default_cfg: Config,
+    ) -> None:
+        """Without --include-source, no nodes should have source_text."""
+        out = tmp_path / "out.json"
+        args = argparse.Namespace(
+            path=fixture_dir / "simple_function.py",
+            output=out,
+            exclude=None,
+            quiet=True,
+        )
+        rc = run_build(args, default_cfg)
+        assert rc == 0
+        data = json.loads(out.read_text())
+        for node in data["nodes"]:
+            assert "source_text" not in node.get("attrs", {}), (
+                f"Node {node['name']!r} has source_text without --include-source"
+            )
+
+    def test_end_location_always_present(
+        self,
+        fixture_dir: Path,
+        tmp_path: Path,
+        default_cfg: Config,
+    ) -> None:
+        """end_location should be populated regardless of --include-source."""
+        out = tmp_path / "out.json"
+        args = argparse.Namespace(
+            path=fixture_dir / "simple_function.py",
+            output=out,
+            exclude=None,
+            quiet=True,
+        )
+        rc = run_build(args, default_cfg)
+        assert rc == 0
+        data = json.loads(out.read_text())
+        func_nodes = [n for n in data["nodes"] if n["kind"] == "function"]
+        for fn in func_nodes:
+            assert fn.get("end_location") is not None, (
+                f"Function {fn['name']!r} should have end_location"
+            )

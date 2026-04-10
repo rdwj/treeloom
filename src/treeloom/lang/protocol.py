@@ -19,11 +19,19 @@ class NodeEmitter(Protocol):
     consumers never interact with NodeEmitter directly.
     """
 
-    def emit_module(self, name: str, path: Path) -> NodeId: ...
+    def emit_module(
+        self,
+        name: str,
+        path: Path,
+        end_location: SourceLocation | None = None,
+        source_text: str | None = None,
+    ) -> NodeId: ...
 
     def emit_class(
         self, name: str, location: SourceLocation, scope: NodeId,
         bases: list[str] | None = None,
+        end_location: SourceLocation | None = None,
+        source_text: str | None = None,
     ) -> NodeId: ...
 
     def emit_function(
@@ -34,6 +42,8 @@ class NodeEmitter(Protocol):
         params: list[str] | None = None,
         is_async: bool = False,
         decorators: list[str] | None = None,
+        end_location: SourceLocation | None = None,
+        source_text: str | None = None,
     ) -> NodeId: ...
 
     def emit_parameter(
@@ -43,11 +53,15 @@ class NodeEmitter(Protocol):
         function: NodeId,
         type_annotation: str | None = None,
         position: int = 0,
+        end_location: SourceLocation | None = None,
+        source_text: str | None = None,
     ) -> NodeId: ...
 
     def emit_variable(
         self, name: str, location: SourceLocation, scope: NodeId,
         inferred_type: str | None = None,
+        end_location: SourceLocation | None = None,
+        source_text: str | None = None,
     ) -> NodeId: ...
 
     def emit_call(
@@ -57,6 +71,8 @@ class NodeEmitter(Protocol):
         scope: NodeId,
         args: list[str] | None = None,
         receiver_inferred_type: str | None = None,
+        end_location: SourceLocation | None = None,
+        source_text: str | None = None,
     ) -> NodeId: ...
 
     def emit_literal(
@@ -65,9 +81,17 @@ class NodeEmitter(Protocol):
         literal_type: str,
         location: SourceLocation,
         scope: NodeId,
+        end_location: SourceLocation | None = None,
+        source_text: str | None = None,
     ) -> NodeId: ...
 
-    def emit_return(self, location: SourceLocation, scope: NodeId) -> NodeId: ...
+    def emit_return(
+        self,
+        location: SourceLocation,
+        scope: NodeId,
+        end_location: SourceLocation | None = None,
+        source_text: str | None = None,
+    ) -> NodeId: ...
 
     def emit_import(
         self,
@@ -77,6 +101,8 @@ class NodeEmitter(Protocol):
         scope: NodeId,
         is_from: bool = False,
         aliases: dict[str, str] | None = None,
+        end_location: SourceLocation | None = None,
+        source_text: str | None = None,
     ) -> NodeId: ...
 
     # Data flow
@@ -91,6 +117,8 @@ class NodeEmitter(Protocol):
         location: SourceLocation,
         scope: NodeId,
         has_else: bool = False,
+        end_location: SourceLocation | None = None,
+        source_text: str | None = None,
     ) -> NodeId: ...
 
     def emit_loop_node(
@@ -99,6 +127,8 @@ class NodeEmitter(Protocol):
         location: SourceLocation,
         scope: NodeId,
         iterator_var: str | None = None,
+        end_location: SourceLocation | None = None,
+        source_text: str | None = None,
     ) -> NodeId: ...
 
     # Control flow edges

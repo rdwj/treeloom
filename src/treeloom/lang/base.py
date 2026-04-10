@@ -85,3 +85,14 @@ class TreeSitterVisitor:
             line=node.start_point.row + 1,
             column=node.start_point.column,
         )
+
+    def _end_location(self, node: tree_sitter.Node, file_path: Path) -> SourceLocation:
+        """Convert a tree-sitter node end position to a SourceLocation.
+
+        tree-sitter rows are 0-based; treeloom lines are 1-based.
+        """
+        return SourceLocation(
+            file=file_path,
+            line=node.end_point.row + 1,
+            column=node.end_point.column,
+        )

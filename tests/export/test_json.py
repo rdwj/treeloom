@@ -22,12 +22,14 @@ def _make_node(
     line: int = 1,
     scope: str | None = None,
     attrs: dict | None = None,
+    end_location: SourceLocation | None = None,
 ) -> CpgNode:
     return CpgNode(
         id=NodeId(id_str),
         kind=kind,
         name=name,
         location=SourceLocation(file=Path(file), line=line),
+        end_location=end_location,
         scope=NodeId(scope) if scope else None,
         attrs=attrs or {},
     )
@@ -113,6 +115,65 @@ class TestJsonRoundTrip:
         pretty = to_json(sample_cpg, indent=4)
         # Both must parse to equivalent data.
         assert json.loads(compact) == json.loads(pretty)
+
+    def test_round_trip_preserves_end_location(self):
+        cpg = CodePropertyGraph()
+        end_loc = SourceLocation(file=Path("test.py"), line=10, column=5)
+        node = _make_node(
+            "fn", NodeKind.FUNCTION, "foo", "test.py", 2,
+            end_location=end_loc,
+        )
+        cpg.add_node(node)
+        restored = from_json(to_json(cpg))
+        fn = restored.node(NodeId("fn"))
+        assert fn is not None
+        assert fn.end_location is not None
+        assert fn.end_location.line == 10
+        assert fn.end_location.column == 5
+        assert fn.end_location.file == Path("test.py")
+
+    def test_round_trip_preserves_none_end_location(self):
+        cpg = CodePropertyGraph()
+        node = _make_node("v1", NodeKind.VARIABLE, "x")
+        cpg.add_node(node)
+        restored = from_json(to_json(cpg))
+        v = restored.node(NodeId("v1"))
+        assert v is not None
+        assert v.end_location is None
+
+    def test_round_trip_preserves_source_text_in_attrs(self):
+        cpg = CodePropertyGraph()
+        node = _make_node(
+            "fn", NodeKind.FUNCTION, "foo", "test.py", 2,
+            attrs={"source_text": "def foo():\n    pass", "is_async": False},
+        )
+        cpg.add_node(node)
+        restored = from_json(to_json(cpg))
+        fn = restored.node(NodeId("fn"))
+        assert fn is not None
+        assert fn.attrs["source_text"] == "def foo():\n    pass"
+
+    def test_backward_compat_missing_end_location(self):
+        """JSON without end_location key should deserialize with end_location=None."""
+        data = {
+            "treeloom_version": "0.1.0",
+            "nodes": [{
+                "id": "fn",
+                "kind": "function",
+                "name": "foo",
+                "location": {"file": "test.py", "line": 1, "column": 0},
+                "scope": None,
+                "attrs": {},
+            }],
+            "edges": [],
+            "annotations": {},
+            "edge_annotations": [],
+        }
+        import json
+        cpg = from_json(json.dumps(data))
+        fn = cpg.node(NodeId("fn"))
+        assert fn is not None
+        assert fn.end_location is None
 
     def test_colon_ids_round_trip(self):
         """Node IDs with colons (the real format) must survive round-trip."""

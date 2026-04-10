@@ -1285,3 +1285,71 @@ class TestImportFollowingResolution:
                     f"{target.name} should be scoped in import_resolution_lib, "
                     f"got scope {cpg.scope_of(target.id).name if cpg.scope_of(target.id) else '?'}"
                 )
+
+
+class TestEndLocation:
+    """Verify the Python visitor populates end_location on all node kinds."""
+
+    @pytest.fixture()
+    def cpg(self):
+        return _build("simple_function.py")
+
+    def test_module_has_end_location(self, cpg):
+        mod = next(cpg.nodes(kind=NodeKind.MODULE))
+        assert mod.end_location is not None
+        assert mod.end_location.line >= mod.location.line
+
+    def test_function_has_end_location(self, cpg):
+        func = next(n for n in cpg.nodes(kind=NodeKind.FUNCTION) if n.name == "add")
+        assert func.end_location is not None
+        assert func.end_location.line >= func.location.line
+
+    def test_parameter_has_end_location(self, cpg):
+        params = list(cpg.nodes(kind=NodeKind.PARAMETER))
+        assert len(params) > 0
+        for p in params:
+            assert p.end_location is not None, f"Parameter {p.name!r} missing end_location"
+
+    def test_end_location_after_start(self, cpg):
+        """end_location should always be at or after location (start)."""
+        for node in cpg.nodes():
+            if node.location is not None and node.end_location is not None:
+                assert (node.end_location.line, node.end_location.column) >= (
+                    node.location.line, node.location.column
+                ), f"Node {node.name!r} has end before start"
+
+
+class TestSourceText:
+    """Verify include_source mode populates source_text on indexable nodes."""
+
+    @pytest.fixture()
+    def cpg_with_source(self):
+        return (
+            CPGBuilder(include_source=True)
+            .add_file(FIXTURES / "simple_function.py")
+            .build()
+        )
+
+    @pytest.fixture()
+    def cpg_without_source(self):
+        return _build("simple_function.py")
+
+    def test_function_has_source_text(self, cpg_with_source):
+        func = next(
+            n for n in cpg_with_source.nodes(kind=NodeKind.FUNCTION)
+            if n.name == "add"
+        )
+        assert "source_text" in func.attrs
+        assert "def add" in func.attrs["source_text"]
+
+    def test_module_no_source_text(self, cpg_with_source):
+        """Module nodes skip source_text (it would be the entire file)."""
+        mod = next(cpg_with_source.nodes(kind=NodeKind.MODULE))
+        assert "source_text" not in mod.attrs
+
+    def test_default_no_source_text(self, cpg_without_source):
+        """Without include_source, no node should have source_text in attrs."""
+        for node in cpg_without_source.nodes():
+            assert "source_text" not in node.attrs, (
+                f"Node {node.name!r} has source_text without include_source"
+            )

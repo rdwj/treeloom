@@ -230,6 +230,7 @@ class CodePropertyGraph:
                 "kind": cpg_node.kind.value,
                 "name": cpg_node.name,
                 "location": _serialize_location(cpg_node.location),
+                "end_location": _serialize_location(cpg_node.end_location),
                 "scope": str(cpg_node.scope) if cpg_node.scope is not None else None,
                 "attrs": cpg_node.attrs,
             }
@@ -263,12 +264,14 @@ class CodePropertyGraph:
 
         for node_data in data["nodes"]:
             location = _deserialize_location(node_data["location"])
+            end_location = _deserialize_location(node_data.get("end_location"))
             scope = NodeId(node_data["scope"]) if node_data["scope"] is not None else None
             cpg_node = CpgNode(
                 id=NodeId(node_data["id"]),
                 kind=NodeKind(node_data["kind"]),
                 name=node_data["name"],
                 location=location,
+                end_location=end_location,
                 scope=scope,
                 attrs=dict(node_data.get("attrs", {})),
             )

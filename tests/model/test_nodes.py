@@ -116,6 +116,40 @@ class TestCpgNode:
         )
         assert a == b
 
+    def test_end_location(self):
+        start = SourceLocation(file=Path("foo.py"), line=1, column=0)
+        end = SourceLocation(file=Path("foo.py"), line=5, column=10)
+        node = CpgNode(
+            id=NodeId("fn"),
+            kind=NodeKind.FUNCTION,
+            name="my_func",
+            location=start,
+            end_location=end,
+        )
+        assert node.end_location == end
+        assert node.end_location.line == 5
+        assert node.end_location.column == 10
+
+    def test_end_location_defaults_to_none(self):
+        node = CpgNode(
+            id=NodeId("1"),
+            kind=NodeKind.VARIABLE,
+            name="x",
+            location=None,
+        )
+        assert node.end_location is None
+
+    def test_end_location_does_not_affect_equality(self):
+        """end_location is a regular field, so it participates in equality."""
+        loc = SourceLocation(file=Path("f.py"), line=1, column=0)
+        a = CpgNode(id=NodeId("1"), kind=NodeKind.VARIABLE, name="x", location=loc)
+        b = CpgNode(
+            id=NodeId("1"), kind=NodeKind.VARIABLE, name="x", location=loc,
+            end_location=SourceLocation(file=Path("f.py"), line=5, column=0),
+        )
+        # CpgNode.__eq__ is based on id only (custom __eq__)
+        assert a == b
+
     def test_default_attrs_independent(self):
         """Each node gets its own attrs dict."""
         a = CpgNode(id=NodeId("1"), kind=NodeKind.VARIABLE, name="x", location=None)
