@@ -54,7 +54,11 @@ class JavaVisitor(TreeSitterVisitor):
         """Walk the parse tree and emit CPG nodes and edges."""
         root = tree.root_node
         source = root.text
-        module_id = emitter.emit_module(file_path.stem, file_path)
+        module_end = self._end_location(root, file_path)
+        module_id = emitter.emit_module(
+            file_path.stem, file_path,
+            end_location=module_end,
+        )
         ctx = _VisitContext(emitter=emitter, file_path=file_path, source=source)
         ctx.scope_stack.append(module_id)
         for child in root.children:
@@ -113,6 +117,8 @@ class JavaVisitor(TreeSitterVisitor):
             self._node_text(name_node, ctx.source),
             self._location(node, ctx.file_path),
             ctx.current_scope,
+            end_location=self._end_location(node, ctx.file_path),
+            source_text=self._node_text(node, ctx.source),
         )
         ctx.scope_stack.append(class_id)
         ctx.defined_vars.push()
@@ -134,6 +140,8 @@ class JavaVisitor(TreeSitterVisitor):
             self._location(node, ctx.file_path),
             ctx.current_scope,
             params=None,  # _emit_typed_params handles params with type annotations
+            end_location=self._end_location(node, ctx.file_path),
+            source_text=self._node_text(node, ctx.source),
         )
         ctx.scope_stack.append(func_id)
         ctx.defined_vars.push()
@@ -158,6 +166,8 @@ class JavaVisitor(TreeSitterVisitor):
             self._location(node, ctx.file_path),
             ctx.current_scope,
             params=None,
+            end_location=self._end_location(node, ctx.file_path),
+            source_text=self._node_text(node, ctx.source),
         )
         ctx.scope_stack.append(func_id)
         ctx.defined_vars.push()
@@ -199,7 +209,8 @@ class JavaVisitor(TreeSitterVisitor):
         self, node: tree_sitter.Node, ctx: _VisitContext
     ) -> None:
         ret_id = ctx.emitter.emit_return(
-            self._location(node, ctx.file_path), ctx.current_scope
+            self._location(node, ctx.file_path), ctx.current_scope,
+            end_location=self._end_location(node, ctx.file_path),
         )
         for child in node.children:
             if child.type in ("return", ";"):
@@ -235,6 +246,7 @@ class JavaVisitor(TreeSitterVisitor):
             self._location(node, ctx.file_path),
             ctx.current_scope,
             is_from=True,
+            end_location=self._end_location(node, ctx.file_path),
         )
 
     def _visit_if_statement(
@@ -244,6 +256,7 @@ class JavaVisitor(TreeSitterVisitor):
         branch_id = ctx.emitter.emit_branch_node(
             "if", self._location(node, ctx.file_path), ctx.current_scope,
             has_else=has_else,
+            end_location=self._end_location(node, ctx.file_path),
         )
         condition = node.child_by_field_name("condition")
         if condition is not None:
@@ -268,7 +281,8 @@ class JavaVisitor(TreeSitterVisitor):
         self, node: tree_sitter.Node, ctx: _VisitContext
     ) -> None:
         loop_id = ctx.emitter.emit_loop_node(
-            "for", self._location(node, ctx.file_path), ctx.current_scope
+            "for", self._location(node, ctx.file_path), ctx.current_scope,
+            end_location=self._end_location(node, ctx.file_path),
         )
         init = node.child_by_field_name("init")
         if init is not None:
@@ -292,6 +306,7 @@ class JavaVisitor(TreeSitterVisitor):
         loop_id = ctx.emitter.emit_loop_node(
             "for", self._location(node, ctx.file_path), ctx.current_scope,
             iterator_var=iterator_var,
+            end_location=self._end_location(node, ctx.file_path),
         )
         if iterator_var is not None and name_node is not None:
             var_id = ctx.emitter.emit_variable(
@@ -302,6 +317,7 @@ class JavaVisitor(TreeSitterVisitor):
                     column=name_node.start_point.column,
                 ),
                 loop_id,
+                end_location=self._end_location(name_node, ctx.file_path),
             )
             ctx.defined_vars[iterator_var] = var_id
         body = node.child_by_field_name("body")
@@ -315,7 +331,8 @@ class JavaVisitor(TreeSitterVisitor):
         self, node: tree_sitter.Node, ctx: _VisitContext
     ) -> None:
         loop_id = ctx.emitter.emit_loop_node(
-            "while", self._location(node, ctx.file_path), ctx.current_scope
+            "while", self._location(node, ctx.file_path), ctx.current_scope,
+            end_location=self._end_location(node, ctx.file_path),
         )
         condition = node.child_by_field_name("condition")
         if condition is not None:
@@ -342,6 +359,7 @@ class JavaVisitor(TreeSitterVisitor):
                 _LITERAL_TYPES[node.type],
                 self._location(node, ctx.file_path),
                 ctx.current_scope,
+                end_location=self._end_location(node, ctx.file_path),
             )
         if node.type == "identifier":
             return ctx.defined_vars.get(self._node_text(node, ctx.source))
@@ -408,6 +426,7 @@ class JavaVisitor(TreeSitterVisitor):
                 "<string_concat>",
                 self._location(node, ctx.file_path),
                 ctx.current_scope,
+                end_location=self._end_location(node, ctx.file_path),
             )
             if left_id is not None:
                 ctx.emitter.emit_data_flow(left_id, concat_id)
@@ -482,6 +501,7 @@ class JavaVisitor(TreeSitterVisitor):
         call_id = ctx.emitter.emit_call(
             target_name, self._location(node, ctx.file_path),
             ctx.current_scope, args=arg_texts,
+            end_location=self._end_location(node, ctx.file_path),
         )
         self._wire_args(arg_ids, arg_is_var, call_id, ctx)
         # Wire receiver object into call so that e.g. `queryParams.get()`
@@ -506,6 +526,7 @@ class JavaVisitor(TreeSitterVisitor):
         call_id = ctx.emitter.emit_call(
             f"new {type_name}", self._location(node, ctx.file_path),
             ctx.current_scope, args=arg_texts,
+            end_location=self._end_location(node, ctx.file_path),
         )
         self._wire_args(arg_ids, arg_is_var, call_id, ctx)
         return call_id
@@ -527,7 +548,10 @@ class JavaVisitor(TreeSitterVisitor):
             line=name_node.start_point.row + 1,
             column=name_node.start_point.column,
         )
-        var_id = ctx.emitter.emit_variable(var_name, loc, ctx.current_scope)
+        var_id = ctx.emitter.emit_variable(
+            var_name, loc, ctx.current_scope,
+            end_location=self._end_location(name_node, ctx.file_path),
+        )
         ctx.defined_vars[var_name] = var_id
         value_node = node.child_by_field_name("value")
         if value_node is not None:
@@ -550,7 +574,10 @@ class JavaVisitor(TreeSitterVisitor):
             line=left.start_point.row + 1,
             column=left.start_point.column,
         )
-        var_id = ctx.emitter.emit_variable(var_name, loc, ctx.current_scope)
+        var_id = ctx.emitter.emit_variable(
+            var_name, loc, ctx.current_scope,
+            end_location=self._end_location(left, ctx.file_path),
+        )
         ctx.defined_vars[var_name] = var_id
         if right is not None:
             rhs_id = self._visit_expression(right, ctx)
@@ -586,6 +613,7 @@ class JavaVisitor(TreeSitterVisitor):
                 param_id = ctx.emitter.emit_parameter(
                     param_name, loc, func_id,
                     type_annotation=type_ann, position=pos,
+                    end_location=self._end_location(child, ctx.file_path),
                 )
                 ctx.defined_vars[param_name] = param_id
                 pos += 1

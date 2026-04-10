@@ -505,6 +505,78 @@ class Foo {
         )
 
 
+class TestEndLocation:
+    """Verify the Java visitor populates end_location on all node kinds."""
+
+    @pytest.fixture()
+    def cpg(self) -> CodePropertyGraph:
+        return _build("SimpleClass.java")
+
+    def test_module_has_end_location(self, cpg: CodePropertyGraph) -> None:
+        mod = next(cpg.nodes(kind=NodeKind.MODULE))
+        assert mod.end_location is not None
+        assert mod.end_location.line >= mod.location.line
+
+    def test_class_has_end_location(self, cpg: CodePropertyGraph) -> None:
+        cls = next(n for n in cpg.nodes(kind=NodeKind.CLASS) if n.name == "SimpleClass")
+        assert cls.end_location is not None
+        assert cls.end_location.line >= cls.location.line
+
+    def test_function_has_end_location(self, cpg: CodePropertyGraph) -> None:
+        func = next(n for n in cpg.nodes(kind=NodeKind.FUNCTION) if n.name == "getValue")
+        assert func.end_location is not None
+        assert func.end_location.line >= func.location.line
+
+    def test_parameter_has_end_location(self, cpg: CodePropertyGraph) -> None:
+        params = list(cpg.nodes(kind=NodeKind.PARAMETER))
+        assert len(params) > 0
+        for p in params:
+            assert p.end_location is not None, f"Parameter {p.name!r} missing end_location"
+
+    def test_end_location_after_start(self, cpg: CodePropertyGraph) -> None:
+        """end_location should always be at or after location (start)."""
+        for node in cpg.nodes():
+            if node.location is not None and node.end_location is not None:
+                assert (node.end_location.line, node.end_location.column) >= (
+                    node.location.line, node.location.column
+                ), f"Node {node.name!r} has end before start"
+
+
+class TestSourceText:
+    """Verify include_source mode populates source_text on class/function nodes."""
+
+    @pytest.fixture()
+    def cpg_with_source(self) -> CodePropertyGraph:
+        return (
+            CPGBuilder(include_source=True)
+            .add_file(FIXTURES / "SimpleClass.java")
+            .build()
+        )
+
+    @pytest.fixture()
+    def cpg_without_source(self) -> CodePropertyGraph:
+        return _build("SimpleClass.java")
+
+    def test_class_has_source_text(self, cpg_with_source: CodePropertyGraph) -> None:
+        cls = next(n for n in cpg_with_source.nodes(kind=NodeKind.CLASS) if n.name == "SimpleClass")
+        assert "source_text" in cls.attrs
+        assert "class SimpleClass" in cls.attrs["source_text"]
+
+    def test_function_has_source_text(self, cpg_with_source: CodePropertyGraph) -> None:
+        func = next(n for n in cpg_with_source.nodes(kind=NodeKind.FUNCTION) if n.name == "getValue")
+        assert "source_text" in func.attrs
+
+    def test_module_no_source_text(self, cpg_with_source: CodePropertyGraph) -> None:
+        mod = next(cpg_with_source.nodes(kind=NodeKind.MODULE))
+        assert "source_text" not in mod.attrs
+
+    def test_default_no_source_text(self, cpg_without_source: CodePropertyGraph) -> None:
+        for node in cpg_without_source.nodes():
+            assert "source_text" not in node.attrs, (
+                f"Node {node.name!r} has source_text without include_source"
+            )
+
+
 class TestRegistryIntegration:
     """Verify Java visitor is registered in the default registry."""
 
