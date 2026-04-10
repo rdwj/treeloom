@@ -1,0 +1,15 @@
+[allowlist]
+description = "Project-specific allowlist for false positives"
+
+paths = [
+    '''tests?\/fixtures\/''',
+    '''examples\/''',
+    '''docs\/.*\.md$''',
+    '''README\.md$''',
+]
+
+regexes = [
+    '''YOUR_.*_HERE''',
+    '''<your-.*-here>''',
+    '''REPLACE_WITH_YOUR''',
+]

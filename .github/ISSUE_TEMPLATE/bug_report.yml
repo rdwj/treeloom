@@ -1,0 +1,51 @@
+name: Bug report
+description: Report something that is broken or behaving incorrectly.
+title: "<brief description>"
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for filing a bug! Please fill out the fields below. If this is a security issue, use the private security advisory flow instead (see the link on the issue picker page).
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: What's wrong? One or two sentences.
+    validations:
+      required: true
+
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Steps to reproduce
+      description: Minimal steps to trigger the bug. Paste commands or code.
+      render: shell
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+      description: What should have happened?
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+      description: What did happen? Include error messages, logs, stack traces.
+      render: shell
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Version / commit
+      description: Package version, image tag, or git SHA.
+    validations:
+      required: false
