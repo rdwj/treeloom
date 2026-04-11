@@ -218,6 +218,13 @@ mypy src/treeloom/
 
 ## Changelog
 
+### Version 0.8.1
+
+- Taint analysis performance: batch convergence groups labels by `(name, field_path)` during propagation, reducing worklist complexity from O(sources × nodes) to O(label_kinds × nodes). 15-file Java scans drop from ~2.8s to ~0.12s (23x faster).
+- Graph index structures: `children_of()`, `successors(edge_kind=...)`, and `predecessors(edge_kind=...)` now use maintained indexes instead of full-graph scans, reducing per-call cost from O(N) / O(E) to O(children) / O(neighbors).
+- Pre-computed DEFINED_BY index in taint engine eliminates O(E) inner-loop scans during inter-procedural propagation.
+- 1281 tests
+
 ### Version 0.8.0
 
 - Python type annotation extraction: parameter annotations (`def foo(x: Dog):`), variable annotations (`x: Dog = ...`), and function return type annotations (`def foo() -> Dog:`) now populate the type map used for method call resolution. Explicit annotations take priority over constructor inference. Generic types are stripped (`list[str]` → `list`).

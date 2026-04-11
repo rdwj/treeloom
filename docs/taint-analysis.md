@@ -436,6 +436,14 @@ with open("sqli-report.html", "w") as f:
 
 Open `sqli-report.html` in a browser. Nodes are colored by finding type, and you can click any node or edge to inspect its attributes, annotations, and taint labels.
 
+## Performance
+
+The taint engine uses batch convergence: labels that share the same `(name, field_path)` are grouped during propagation so that adding a new origin to an already-tainted node does not re-enqueue it. Combined with indexed graph lookups for scope children and typed edges, the engine scales linearly with CPG size.
+
+In practice, 15 Java files (~300 LOC each, ~2400 CPG nodes) complete a full knowledge graph build including taint analysis in ~120ms. The earlier per-origin propagation scaled quadratically (~2.8s for the same workload).
+
+If you define many sources with distinct label names (e.g., `"db_input"`, `"file_input"`, `"env_var"`), convergence groups them independently. With K distinct label kinds and N nodes, propagation is O(K × N) rather than O(sources × N). For most security analyses, K is 1–3.
+
 ## Tips
 
 **Start with `implicit_param_sources=True` to explore the attack surface.** Once you see which parameter-to-sink paths exist, narrow down to the sources you actually care about.
