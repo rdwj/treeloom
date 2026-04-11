@@ -30,6 +30,11 @@ class CodePropertyGraph:
         self._annotations: dict[str, dict[str, Any]] = {}
         self._edge_annotations: dict[tuple[str, str], dict[str, Any]] = {}
         self._file_nodes: dict[str, set[str]] = {}
+        # Scope index: scope_id -> [child_node_ids] for O(1) children_of
+        self._scope_children: dict[str, list[str]] = {}
+        # Edge kind indexes: (kind_value, source_id) -> [target_ids] and reverse
+        self._edge_fwd: dict[tuple[str, str], list[str]] = {}
+        self._edge_rev: dict[tuple[str, str], list[str]] = {}
 
     # -- Node access ----------------------------------------------------------
 
@@ -45,22 +50,67 @@ class CodePropertyGraph:
         if node.location is not None:
             file_key = str(PurePosixPath(node.location.file))
             self._file_nodes.setdefault(file_key, set()).add(id_str)
+        if node.scope is not None:
+            self._scope_children.setdefault(str(node.scope), []).append(id_str)
 
     def remove_node(self, node_id: NodeId) -> None:
         """Remove a node and all its adjacent edges from the graph.
 
-        Also cleans up annotations and the file provenance index.
+        Also cleans up annotations, the file provenance index, and
+        the scope/edge lookup indexes.
         """
         id_str = str(node_id)
         node = self._nodes.pop(id_str, None)
 
-        if node is not None and node.location is not None:
-            file_key = str(PurePosixPath(node.location.file))
-            file_set = self._file_nodes.get(file_key)
-            if file_set is not None:
-                file_set.discard(id_str)
-                if not file_set:
-                    del self._file_nodes[file_key]
+        if node is not None:
+            # Clean scope index: remove this node from its parent's children
+            if node.scope is not None:
+                scope_str = str(node.scope)
+                children = self._scope_children.get(scope_str)
+                if children is not None:
+                    try:
+                        children.remove(id_str)
+                    except ValueError:
+                        pass
+            # Remove this node's own children list (orphans stay in _nodes)
+            self._scope_children.pop(id_str, None)
+
+            if node.location is not None:
+                file_key = str(PurePosixPath(node.location.file))
+                file_set = self._file_nodes.get(file_key)
+                if file_set is not None:
+                    file_set.discard(id_str)
+                    if not file_set:
+                        del self._file_nodes[file_key]
+
+        # Clean edge indexes before the backend removes the edges.
+        # Forward: remove all entries where this node is the source.
+        fwd_keys = [k for k in self._edge_fwd if k[1] == id_str]
+        for k in fwd_keys:
+            # Also clean reverse entries that point back to this source
+            kind_str = k[0]
+            for tgt in self._edge_fwd[k]:
+                rev_key = (kind_str, tgt)
+                rev_list = self._edge_rev.get(rev_key)
+                if rev_list is not None:
+                    try:
+                        rev_list.remove(id_str)
+                    except ValueError:
+                        pass
+            del self._edge_fwd[k]
+        # Reverse: remove all entries where this node is the target.
+        rev_keys = [k for k in self._edge_rev if k[1] == id_str]
+        for k in rev_keys:
+            kind_str = k[0]
+            for src in self._edge_rev[k]:
+                fwd_key = (kind_str, src)
+                fwd_list = self._edge_fwd.get(fwd_key)
+                if fwd_list is not None:
+                    try:
+                        fwd_list.remove(id_str)
+                    except ValueError:
+                        pass
+            del self._edge_rev[k]
 
         self._annotations.pop(id_str, None)
 
@@ -101,12 +151,12 @@ class CodePropertyGraph:
 
     def add_edge(self, edge: CpgEdge) -> None:
         """Add an edge to the graph."""
-        self._backend.add_edge(
-            str(edge.source),
-            str(edge.target),
-            key=edge.kind.value,
-            **edge.attrs,
-        )
+        src_str = str(edge.source)
+        tgt_str = str(edge.target)
+        kind_str = edge.kind.value
+        self._backend.add_edge(src_str, tgt_str, key=kind_str, **edge.attrs)
+        self._edge_fwd.setdefault((kind_str, src_str), []).append(tgt_str)
+        self._edge_rev.setdefault((kind_str, tgt_str), []).append(src_str)
 
     def remove_edge(
         self, source: NodeId, target: NodeId, kind: EdgeKind | None = None
@@ -117,6 +167,34 @@ class CodePropertyGraph:
         self._edge_annotations.pop((src_str, tgt_str), None)
         key = kind.value if kind is not None else None
         self._backend.remove_edge(src_str, tgt_str, key=key)
+        # Update edge indexes
+        if key is not None:
+            fwd_list = self._edge_fwd.get((key, src_str))
+            if fwd_list is not None:
+                try:
+                    fwd_list.remove(tgt_str)
+                except ValueError:
+                    pass
+            rev_list = self._edge_rev.get((key, tgt_str))
+            if rev_list is not None:
+                try:
+                    rev_list.remove(src_str)
+                except ValueError:
+                    pass
+        else:
+            # No kind specified: remove all edge kinds between these two nodes.
+            fwd_keys = [k for k in self._edge_fwd if k[1] == src_str]
+            for k in fwd_keys:
+                try:
+                    self._edge_fwd[k].remove(tgt_str)
+                except ValueError:
+                    pass
+            rev_keys = [k for k in self._edge_rev if k[1] == tgt_str]
+            for k in rev_keys:
+                try:
+                    self._edge_rev[k].remove(src_str)
+                except ValueError:
+                    pass
 
     def edges(self, kind: EdgeKind | None = None) -> Iterator[CpgEdge]:
         """Iterate over edges, optionally filtering by kind."""
@@ -148,13 +226,8 @@ class CodePropertyGraph:
             succ_ids = self._backend.successors(str(node_id))
             return [self._nodes[s] for s in succ_ids if s in self._nodes]
 
-        results: list[CpgNode] = []
-        for edge in self.edges(kind=edge_kind):
-            if edge.source == node_id:
-                target_node = self._nodes.get(str(edge.target))
-                if target_node is not None:
-                    results.append(target_node)
-        return results
+        key = (edge_kind.value, str(node_id))
+        return [self._nodes[t] for t in self._edge_fwd.get(key, []) if t in self._nodes]
 
     def predecessors(
         self, node_id: NodeId, edge_kind: EdgeKind | None = None
@@ -164,13 +237,8 @@ class CodePropertyGraph:
             pred_ids = self._backend.predecessors(str(node_id))
             return [self._nodes[p] for p in pred_ids if p in self._nodes]
 
-        results: list[CpgNode] = []
-        for edge in self.edges(kind=edge_kind):
-            if edge.target == node_id:
-                source_node = self._nodes.get(str(edge.source))
-                if source_node is not None:
-                    results.append(source_node)
-        return results
+        key = (edge_kind.value, str(node_id))
+        return [self._nodes[s] for s in self._edge_rev.get(key, []) if s in self._nodes]
 
     # -- Scope navigation -----------------------------------------------------
 
@@ -184,7 +252,11 @@ class CodePropertyGraph:
     def children_of(self, node_id: NodeId) -> list[CpgNode]:
         """Return direct children (nodes whose scope is this node)."""
         id_str = str(node_id)
-        return [n for n in self._nodes.values() if n.scope is not None and str(n.scope) == id_str]
+        return [
+            self._nodes[cid]
+            for cid in self._scope_children.get(id_str, [])
+            if cid in self._nodes
+        ]
 
     # -- Annotations ----------------------------------------------------------
 
