@@ -39,7 +39,14 @@ def register(subparsers: argparse._SubParsersAction) -> None:  # type: ignore[ty
         "--json", dest="as_json", action="store_true",
         help="Output as JSON (alias for --output-format json)",
     )
-    p.add_argument("--limit", "-l", type=int, default=None, help="Max results")
+    p.add_argument(
+        "--limit", "-l", type=int, default=None,
+        help="Max results (0 = no limit, default: no limit)",
+    )
+    p.add_argument(
+        "--offset", type=int, default=0,
+        help="Skip the first N matching results (default 0)",
+    )
     p.add_argument(
         "--scope", metavar="NAME",
         help="Filter to nodes whose scope chain includes a node with this name",
@@ -129,12 +136,14 @@ def run_query(args: argparse.Namespace, cfg: Config) -> int:
 
     file_sub = args.file
     limit = args.limit if args.limit is not None else cfg.query_limit
+    offset: int = args.offset
     scope_name: str | None = getattr(args, "scope", None)
     count_only: bool = getattr(args, "count", False)
     annotation_key: str | None = getattr(args, "annotation", None)
     annotation_value: str | None = getattr(args, "annotation_value", None)
 
     results: list[CpgNode] = []
+    skipped = 0
     for node in cpg.nodes():
         if _matches(
             node, kinds, name_re, file_sub,
@@ -143,8 +152,11 @@ def run_query(args: argparse.Namespace, cfg: Config) -> int:
             annotation_value=annotation_value,
             cpg=cpg,
         ):
+            if not count_only and skipped < offset:
+                skipped += 1
+                continue
             results.append(node)
-            if not count_only and len(results) >= limit:
+            if not count_only and limit > 0 and len(results) >= limit:
                 break
 
     if count_only:
@@ -179,6 +191,6 @@ def run_query(args: argparse.Namespace, cfg: Config) -> int:
         if output and not output.endswith("\n"):
             sys.stdout.write("\n")
 
-    if len(results) >= limit:
+    if limit > 0 and len(results) >= limit:
         err(f"(showing first {limit} results; use --limit to change)")
     return 0

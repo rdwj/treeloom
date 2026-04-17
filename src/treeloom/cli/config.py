@@ -26,7 +26,7 @@ class Config:
     default_viz_output: str = "cpg.html"
     default_dot_output: str | None = None
     default_policy: str | None = None
-    query_limit: int = 50
+    query_limit: int = 0
 
 
 def _find_project_config(start: Path | None = None) -> Path | None:

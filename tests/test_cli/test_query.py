@@ -36,6 +36,7 @@ def _make_args(cpg_file: Path, **overrides: object) -> argparse.Namespace:
         "as_json": False,
         "output_format": "table",
         "limit": None,
+        "offset": 0,
         "scope": None,
         "count": False,
         "annotation": None,
@@ -115,6 +116,26 @@ class TestQuery:
         for item in data:
             assert item["kind"] == "function"
 
+    def test_query_json_includes_scope_and_end_location(
+        self, cpg_file: Path, default_cfg: Config, capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """query --json includes scope, end_line, end_column (issue #99)."""
+        args = _make_args(cpg_file, as_json=True, kind=["function"])
+        rc = run_query(args, default_cfg)
+        assert rc == 0
+        data = json.loads(capsys.readouterr().out)
+        assert data, "Expected at least one function node"
+        item = data[0]
+        # All expected keys should be present
+        for key in ("id", "kind", "name", "file", "line", "column",
+                    "end_line", "end_column", "scope", "attrs"):
+            assert key in item, f"Missing key {key!r} in query --json output"
+        # Functions should have end_location set
+        assert item["end_line"] is not None, "Expected end_line for function node"
+        assert item["end_column"] is not None, "Expected end_column for function node"
+        # Functions should have a scope (the module)
+        assert item["scope"] is not None, "Expected scope for function node"
+
     def test_query_no_results(
         self, cpg_file: Path, default_cfg: Config, capsys: pytest.CaptureFixture[str],
     ) -> None:
@@ -140,6 +161,24 @@ def class_cpg_file(tmp_path: Path, default_cfg: Config) -> Path:
     )
     run_build(args, default_cfg)
     return out
+
+
+class TestQueryJsonStructure:
+    """Tests for query --json output structure (issue #99)."""
+
+    def test_method_scope_is_class(
+        self, class_cpg_file: Path, default_cfg: Config, capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Methods inside a class should have scope pointing to the class."""
+        args = _make_args(class_cpg_file, as_json=True, kind=["function"], name="add")
+        rc = run_query(args, default_cfg)
+        assert rc == 0
+        data = json.loads(capsys.readouterr().out)
+        assert data, "Expected at least one 'add' method"
+        item = data[0]
+        assert item["scope"] is not None
+        # Scope should reference the Calculator class
+        assert "Calculator" in item["scope"] or "class" in item["scope"]
 
 
 class TestQueryScope:
@@ -204,19 +243,45 @@ class TestQueryCount:
         assert fn_count <= total
         assert fn_count > 0
 
-    def test_count_not_limited_by_default_limit(
+    def test_count_ignores_limit(
         self,
         cpg_file: Path,
         default_cfg: Config,
         capsys: pytest.CaptureFixture[str],
     ) -> None:
-        # --count should not be truncated by the default query_limit
-        args = _make_args(cpg_file, count=True, limit=1)
-        rc = run_query(args, default_cfg)
-        assert rc == 0
-        # Just verify it runs; count may be larger than 1
-        out = capsys.readouterr().out.strip()
-        assert out.isdigit()
+        """--count should return the true total, not capped at --limit."""
+        args_all = _make_args(cpg_file, count=True)
+        run_query(args_all, default_cfg)
+        full_count = int(capsys.readouterr().out.strip())
+
+        args_limited = _make_args(cpg_file, count=True, limit=1)
+        run_query(args_limited, default_cfg)
+        count_with_limit = int(capsys.readouterr().out.strip())
+
+        assert count_with_limit == full_count, (
+            f"--count should ignore --limit: got {count_with_limit} with limit=1, "
+            f"expected {full_count}"
+        )
+
+    def test_count_ignores_offset(
+        self,
+        cpg_file: Path,
+        default_cfg: Config,
+        capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """--count should return the true total, unaffected by --offset."""
+        args_all = _make_args(cpg_file, count=True)
+        run_query(args_all, default_cfg)
+        full_count = int(capsys.readouterr().out.strip())
+
+        args_offset = _make_args(cpg_file, count=True, offset=10)
+        run_query(args_offset, default_cfg)
+        count_with_offset = int(capsys.readouterr().out.strip())
+
+        assert count_with_offset == full_count, (
+            f"--count should ignore --offset: got {count_with_offset} with offset=10, "
+            f"expected {full_count}"
+        )
 
 
 class TestQueryAnnotation:
@@ -355,3 +420,44 @@ class TestQueryOutputFormat:
         assert rc == 0
         data = json.loads(capsys.readouterr().out)
         assert isinstance(data, list)
+
+
+class TestQueryUnlimitedDefault:
+    """Tests for unlimited default and --offset (issue #98)."""
+
+    def test_query_no_limit_by_default(
+        self, cpg_file: Path, default_cfg: Config, capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Default limit=0 returns all nodes (issue #98)."""
+        args = _make_args(cpg_file, as_json=True)
+        rc = run_query(args, default_cfg)
+        assert rc == 0
+        data = json.loads(capsys.readouterr().out)
+        args_count = _make_args(cpg_file, count=True)
+        run_query(args_count, default_cfg)
+        count = int(capsys.readouterr().out.strip())
+        assert len(data) == count
+
+    def test_query_offset(
+        self, cpg_file: Path, default_cfg: Config, capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """--offset skips the first N results."""
+        args_all = _make_args(cpg_file, as_json=True)
+        run_query(args_all, default_cfg)
+        all_data = json.loads(capsys.readouterr().out)
+
+        args_offset = _make_args(cpg_file, as_json=True, offset=2)
+        run_query(args_offset, default_cfg)
+        offset_data = json.loads(capsys.readouterr().out)
+
+        assert len(offset_data) == len(all_data) - 2
+
+    def test_query_offset_exceeds_total(
+        self, cpg_file: Path, default_cfg: Config, capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """--offset larger than the result set returns empty JSON array."""
+        args = _make_args(cpg_file, as_json=True, offset=99999)
+        rc = run_query(args, default_cfg)
+        assert rc == 0
+        data = json.loads(capsys.readouterr().out)
+        assert data == []

@@ -71,6 +71,7 @@ def node_to_dict(node: object) -> dict:
 
     assert isinstance(node, CpgNode)
     loc = node.location
+    end = node.end_location
     return {
         "id": str(node.id),
         "kind": node.kind.value,
@@ -78,6 +79,9 @@ def node_to_dict(node: object) -> dict:
         "file": str(loc.file) if loc else None,
         "line": loc.line if loc else None,
         "column": loc.column if loc else None,
+        "end_line": end.line if end else None,
+        "end_column": end.column if end else None,
+        "scope": str(node.scope) if node.scope else None,
         "attrs": node.attrs,
     }
 

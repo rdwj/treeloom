@@ -18,7 +18,7 @@ from treeloom.cli._util import (
 from treeloom.cli.config import Config
 from treeloom.model.edges import EdgeKind
 
-_DEFAULT_LIMIT = 50
+_DEFAULT_LIMIT = 0
 
 
 def register(subparsers: argparse._SubParsersAction) -> None:  # type: ignore[type-arg]
@@ -47,7 +47,11 @@ def register(subparsers: argparse._SubParsersAction) -> None:  # type: ignore[ty
     )
     p.add_argument(
         "--limit", "-l", type=int, default=_DEFAULT_LIMIT,
-        help=f"Max results (default {_DEFAULT_LIMIT})",
+        help="Max results (0 = no limit, default: no limit)",
+    )
+    p.add_argument(
+        "--offset", type=int, default=0,
+        help="Skip the first N matching results (default 0)",
     )
     p.add_argument(
         "--count", "-c", action="store_true",
@@ -122,9 +126,11 @@ def run_cmd(args: argparse.Namespace, _cfg: Config | None = None) -> int:
             return 1
 
     limit: int = args.limit
-    count_only: bool = getattr(args, "count", False)
+    offset: int = args.offset
+    count_only: bool = args.count
 
     results = []
+    skipped = 0
     for edge in cpg.edges():
         if kinds is not None and edge.kind not in kinds:
             continue
@@ -136,9 +142,12 @@ def run_cmd(args: argparse.Namespace, _cfg: Config | None = None) -> int:
             continue
         if target_re is not None and not target_re.search(tgt_node.name):
             continue
+        if not count_only and skipped < offset:
+            skipped += 1
+            continue
         results.append((edge, src_node, tgt_node))
         # Don't apply the limit when counting — we need the full result set.
-        if not count_only and len(results) >= limit:
+        if not count_only and limit > 0 and len(results) >= limit:
             break
 
     if count_only:
@@ -202,6 +211,6 @@ def run_cmd(args: argparse.Namespace, _cfg: Config | None = None) -> int:
         if output and not output.endswith("\n"):
             sys.stdout.write("\n")
 
-    if len(results) >= limit:
+    if limit > 0 and len(results) >= limit:
         err(f"(showing first {limit} results; use --limit to change)")
     return 0

@@ -40,7 +40,8 @@ def _make_args(cpg_file: Path, **overrides: object) -> argparse.Namespace:
         "target": None,
         "as_json": False,
         "output_format": "table",
-        "limit": 50,
+        "limit": 0,
+        "offset": 0,
         "count": False,
     }
     defaults.update(overrides)
@@ -205,6 +206,50 @@ class TestEdgesCommand:
         assert "No matching" in out
 
 
+class TestEdgesUnlimitedDefault:
+    """Tests for unlimited default and --offset (issue #98)."""
+
+    def test_edges_no_limit_by_default(
+        self, cpg_file: Path, cfg: Config, capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """Default limit=0 returns all edges (issue #98)."""
+        args = _make_args(cpg_file, as_json=True, kind=["contains"])
+        rc = run_cmd(args, cfg)
+        assert rc == 0
+        data = json.loads(capsys.readouterr().out)
+        # With no limit, count should match --count output
+        args_count = _make_args(cpg_file, count=True, kind=["contains"])
+        run_cmd(args_count, cfg)
+        count = int(capsys.readouterr().out.strip())
+        assert len(data) == count
+
+    def test_edges_offset(
+        self, cpg_file: Path, cfg: Config, capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """--offset skips the first N results."""
+        args_all = _make_args(cpg_file, as_json=True, kind=["contains"])
+        run_cmd(args_all, cfg)
+        all_data = json.loads(capsys.readouterr().out)
+
+        args_offset = _make_args(cpg_file, as_json=True, kind=["contains"], offset=3)
+        run_cmd(args_offset, cfg)
+        offset_data = json.loads(capsys.readouterr().out)
+
+        assert len(offset_data) == len(all_data) - 3
+        # The offset results should match the tail of the full results
+        assert offset_data[0] == all_data[3]
+
+    def test_edges_offset_exceeds_total(
+        self, cpg_file: Path, cfg: Config, capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """--offset larger than the result set returns empty output."""
+        args = _make_args(cpg_file, as_json=True, kind=["contains"], offset=99999)
+        rc = run_cmd(args, cfg)
+        assert rc == 0
+        data = json.loads(capsys.readouterr().out)
+        assert data == []
+
+
 class TestEdgesCount:
     """Tests for --count flag on the edges command."""
 
@@ -246,6 +291,23 @@ class TestEdgesCount:
 
         assert count_with_limit == full_count, (
             f"--count should ignore --limit: got {count_with_limit} with limit=1, "
+            f"expected {full_count}"
+        )
+
+    def test_count_ignores_offset(
+        self, cpg_file: Path, cfg: Config, capsys: pytest.CaptureFixture[str],
+    ) -> None:
+        """--count should return the true total, unaffected by --offset."""
+        args_count = _make_args(cpg_file, count=True)
+        run_cmd(args_count, cfg)
+        full_count = int(capsys.readouterr().out.strip())
+
+        args_offset = _make_args(cpg_file, count=True, offset=10)
+        run_cmd(args_offset, cfg)
+        count_with_offset = int(capsys.readouterr().out.strip())
+
+        assert count_with_offset == full_count, (
+            f"--count should ignore --offset: got {count_with_offset} with offset=10, "
             f"expected {full_count}"
         )
 

@@ -19,14 +19,14 @@ def default_cfg() -> Config:
 class TestConfigDefaults:
     def test_default_values(self) -> None:
         cfg = Config()
-        assert cfg.query_limit == 50
+        assert cfg.query_limit == 0
         assert cfg.default_build_output == "cpg.json"
         assert "**/__pycache__" in cfg.exclude_patterns
 
     def test_load_config_no_files(self, tmp_path: Path) -> None:
         # Point to a directory with no config files
         cfg = load_config(tmp_path)
-        assert cfg.query_limit == 50
+        assert cfg.query_limit == 0
 
 
 class TestConfigInit:
