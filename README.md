@@ -218,6 +218,13 @@ mypy src/treeloom/
 
 ## Changelog
 
+### Version 0.9.0
+
+- CLI pagination: `treeloom edges` and `treeloom query` now return all results by default instead of silently truncating at 50. New `--offset` flag on both commands enables pagination when combined with `--limit`.
+- `query --json` output now includes `scope` (parent node ID), `end_line`, and `end_column` fields, bringing the CLI JSON closer to the raw CPG JSON structure.
+- Config default `query_limit` changed from 50 to 0 (unlimited). Users with `.treeloom.yaml` overrides are unaffected.
+- 1291 tests
+
 ### Version 0.8.1
 
 - Taint analysis performance: batch convergence groups labels by `(name, field_path)` during propagation, reducing worklist complexity from O(sources × nodes) to O(label_kinds × nodes). 15-file Java scans drop from ~2.8s to ~0.12s (23x faster).
